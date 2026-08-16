@@ -80,6 +80,12 @@ def main() -> None:
     next_at = time.time() + 2.0  # let the hardware node finish coming up
     results: list = []
 
+    # Track the pack across the run. On a marginal battery the interesting
+    # number is not the resting voltage but how far it sags while the legs are
+    # actually lifting, so keep the minimum seen.
+    battery_min = None
+    battery_last = None
+
     def send_next() -> None:
         nonlocal index, pending_id, sent_at
         index += 1
@@ -104,7 +110,15 @@ def main() -> None:
         if event["type"] != "INPUT":
             continue
 
-        if event["id"] == "tool_result":
+        if event["id"] == "battery":
+            payload = decode(event) or {}
+            load_v = float(payload.get("load_v", 0.0))
+            battery_last = (load_v, float(payload.get("pi_v", 0.0)))
+            if battery_min is None or load_v < battery_min[0]:
+                battery_min = battery_last
+            logger.info(f"    battery load={battery_last[0]:.2f}V pi={battery_last[1]:.2f}V")
+
+        elif event["id"] == "tool_result":
             payload = decode(event) or {}
             if payload.get("id") != pending_id:
                 continue
@@ -139,6 +153,11 @@ def main() -> None:
         logger.info(f"  {'REFUSED' if was_refused else 'ok     '}  {label:<24} {name:<14} {text}")
     logger.info("=" * 62)
     logger.info(f"{len(results)} steps, {refused} refused")
+    if battery_min is not None:
+        logger.info(
+            f"battery: lowest seen load={battery_min[0]:.2f}V pi={battery_min[1]:.2f}V, "
+            f"final load={battery_last[0]:.2f}V pi={battery_last[1]:.2f}V"
+        )
     if refused:
         logger.warning(
             "Steps were refused by the hardware node's safety gate — this is the "
