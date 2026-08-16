@@ -51,12 +51,28 @@ camera rides a pan/tilt head that flexes the cable in service. Replacement order
 result narrows it to the sensor's MIPI transmitter, the cable, or the RP1 receiver, and cannot
 distinguish between those three from software.
 
-One software avenue remains untested and was deliberately not taken: kernel 6.17.0-1003-raspi
-is still installed and staged in `/boot/firmware/old/` as `vmlinuz.bak-1003`, so a regression
-in Ubuntu's 6.17.0-1021 `rp1-cfe` backport could in principle be ruled out by booting it. That
-requires editing `config.txt` and rebooting a headless robot, which risks an unbootable machine
-needing physical card access, and it must not be done with the servo rail energised. Given the
-test-pattern result, the expected value is low. It is recorded as an option, not a plan.
+Two software avenues remain untested. Both need a reboot of a headless robot, which must not be
+done with the servo rail energised, so neither was taken unilaterally. Given the test-pattern
+result the expected value of both is low; they are recorded as options, not a plan, and are the
+*only* software steps left worth taking.
+
+1. **Kernel regression test.** 6.17.0-1003-raspi is still installed, and
+   `/boot/firmware/old/vmlinuz.bak-1003` was confirmed by string inspection to be that kernel.
+   Ubuntu's `rp1-cfe` is a non-standard backport that does emit a kernel WARNING (below), so a
+   regression in 6.17.0-1021 is not absurd. `flash-kernel` makes the switch reversible:
+   `sudo flash-kernel --force 6.17.0-1003-raspi`, reboot, test, and revert with
+   `sudo flash-kernel --force 6.17.0-1021-raspi`.
+2. **Overlay link parameters.** The `imx708` overlay accepts `link-frequency` of 450000000
+   (default), 447000000 or 453000000, plus `media-controller=off` and `vcm=off`. These exist
+   for interference mitigation and would be set with `camera_auto_detect=0` and an explicit
+   `dtoverlay=imx708,link-frequency=<hz>`. A 0.7% frequency shift plausibly rescues a
+   marginal link; it does not explain a link delivering nothing at all.
+
+Also eliminated: the driver's `track_csi2_errors=1` module parameter was enabled and a capture
+run under it reported **no CSI-2 errors of any kind** — confirming silence rather than
+corruption. The only other module parameters are `imx708`'s `qbc_adjust` (Bayer line
+correction, cosmetic) and a debug flag; none affect lane count or timing. `apt` offers no newer
+kernel, libcamera, rpicam or raspi-firmware package, so there is no update to apply.
 
 **Noted in passing:** Ubuntu ships two CFE drivers — `rp1-cfe-downstream.ko` (bound here, via
 DT compatible `raspberrypi,rp1-cfe`) and the upstream `rp1-cfe.ko` (compatible
