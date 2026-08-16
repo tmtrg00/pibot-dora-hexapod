@@ -1,0 +1,30 @@
+# Turn-in-place graph. LOCOMOTION: runs full gait cycles, so the servos draw
+# sustained current rather than the single lift the pose test used. The turn
+# node segments the rotation and aborts to a stand + relax if the pack sags
+# below PIBOT_TURN_ABORT_V.
+#
+#   PIBOT_TURN_CYCLES=5 ./run.sh turn              calibration run
+#   PIBOT_TURN_DEG_PER_CYCLE=16 ./run.sh turn      full 360 once measured
+
+nodes:
+  - id: hardware
+    path: bin/py
+    args: nodes/hardware_node.py
+    inputs:
+      tick: dora/timer/millis/1000
+      tool_call: turn/tool_call
+    outputs:
+      - battery
+      - health
+      - tool_result
+
+  - id: turn
+    path: bin/py
+    args: nodes/turn_node.py
+    inputs:
+      tick: dora/timer/millis/250
+      tool_result: hardware/tool_result
+      battery: hardware/battery
+      health: hardware/health
+    outputs:
+      - tool_call
