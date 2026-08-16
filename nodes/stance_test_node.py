@@ -124,3 +124,7 @@ def main() -> None:
     logger.info(f"{good}/{len(results)} steps ok" + (f", lowest battery {battery_min:.2f}V" if battery_min else ""))
     if aborted:
         logger.warning("Run was ABORTED - robot returned to neutral and relaxed.")
+
+
+if __name__ == "__main__":
+    main()
