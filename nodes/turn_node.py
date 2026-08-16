@@ -48,7 +48,18 @@ SPEED = int(os.environ.get("PIBOT_TURN_SPEED", "6"))
 SEGMENT = max(1, min(10, int(os.environ.get("PIBOT_TURN_SEGMENT", "5"))))
 ABORT_V = float(os.environ.get("PIBOT_TURN_ABORT_V", "4.9"))
 TARGET_DEGREES = float(os.environ.get("PIBOT_TURN_DEGREES", "360"))
+
+# Measured on hardware 2026-08-16: 23 gait cycles of walk(turn_right) produced
+# roughly 180 degrees of body rotation, so about 7.8 deg/cycle. That means the
+# `angle` argument the gait engine receives (8 for a turn_* direction) maps
+# about 1:1 to degrees of rotation per cycle -- the stance phase does not double
+# it, which reading run_gait alone had left ambiguous.
+MEASURED_DEG_PER_CYCLE = 7.8
 DEG_PER_CYCLE = os.environ.get("PIBOT_TURN_DEG_PER_CYCLE")
+
+# An explicit cycle count forces calibration mode; otherwise we solve for the
+# target rotation using the measured figure.
+CALIBRATION_CYCLES = os.environ.get("PIBOT_TURN_CYCLES")
 
 STEP_TIMEOUT_S = 40.0
 SETTLE_S = 1.2
@@ -56,14 +67,14 @@ SETTLE_S = 1.2
 
 def planned_cycles() -> tuple:
     """Return (total_cycles, description)."""
-    if DEG_PER_CYCLE:
-        per = float(DEG_PER_CYCLE)
-        if per <= 0:
-            raise SystemExit("PIBOT_TURN_DEG_PER_CYCLE must be positive")
-        cycles = max(1, int(math.ceil(TARGET_DEGREES / per)))
-        return cycles, f"{TARGET_DEGREES:.0f}deg at {per:.1f}deg/cycle"
-    cycles = int(os.environ.get("PIBOT_TURN_CYCLES", "5"))
-    return cycles, f"{cycles} cycles (calibration - measure the angle turned)"
+    if CALIBRATION_CYCLES:
+        cycles = int(CALIBRATION_CYCLES)
+        return cycles, f"{cycles} cycles (calibration - measure the angle turned)"
+    per = float(DEG_PER_CYCLE) if DEG_PER_CYCLE else MEASURED_DEG_PER_CYCLE
+    if per <= 0:
+        raise SystemExit("PIBOT_TURN_DEG_PER_CYCLE must be positive")
+    cycles = max(1, int(math.ceil(TARGET_DEGREES / per)))
+    return cycles, f"{TARGET_DEGREES:.0f}deg at {per:.1f}deg/cycle"
 
 
 def main() -> None:
