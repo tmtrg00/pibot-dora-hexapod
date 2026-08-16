@@ -1,0 +1,54 @@
+# Motion test graph — exercises the servo path without audio, LLM or autonomy.
+#
+# THIS GRAPH MOVES THE ROBOT. The hardware node constructs Control(), which
+# drives the legs to the standing pose merely by being instantiated, and then
+# motion_test drives a scripted pose sequence.
+#
+# Before running:
+#   * servo power on
+#   * battery above 6.0V UNDER LOAD (check with servo power already on — the
+#     unloaded reading is roughly a volt optimistic)
+#   * robot on a level surface with room around it
+#
+# The hardware node refuses everything below the floor, including constructing
+# Control() at all, so a flat pack fails safe rather than browning out mid-lift.
+#
+#   ./run.sh motion                        pose only, robot stays in place
+#   PIBOT_MOTION_WALK=1 ./run.sh motion    adds a short walk; robot travels
+#
+# To verify the refusal path without any movement, raise the floor above the
+# current pack voltage:
+#
+#   PIBOT_BATTERY_FLOOR=9.0 ./run.sh motion
+
+nodes:
+  - id: hardware
+    path: bin/py
+    args: nodes/hardware_node.py
+    inputs:
+      tick: dora/timer/millis/2000
+      tool_call: motion_test/tool_call
+    outputs:
+      - battery
+      - health
+      - tool_result
+
+  - id: led
+    path: bin/py
+    args: nodes/led_node.py
+    inputs:
+      emotion: motion_test/emotion
+    outputs:
+      - tool_result
+
+  - id: motion_test
+    path: bin/py
+    args: nodes/motion_test_node.py
+    inputs:
+      tick: dora/timer/millis/250
+      tool_result: hardware/tool_result
+      battery: hardware/battery
+      health: hardware/health
+    outputs:
+      - tool_call
+      - emotion
