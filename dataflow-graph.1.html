@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+</head>
+
+<body>
+    <div class="mermaid">
+        flowchart TB
+  audio["**audio**"]
+  brain["**brain**"]
+  buzzer["**buzzer**"]
+  camera["**camera**"]
+  hardware["**hardware**"]
+  led["**led**"]
+  llm["**llm**"]
+  ultrasonic["**ultrasonic**"]
+subgraph ___dora___ [dora]
+  subgraph ___timer_timer___ [timer]
+    dora/timer/millis/500[\millis/500/]
+    dora/timer/secs/1[\secs/1/]
+    dora/timer/secs/2[\secs/2/]
+  end
+end
+  brain -- listen --> audio
+  brain -- speak --> audio
+  hardware -- battery --> brain
+  ultrasonic -- distance --> brain
+  hardware -- health --> brain
+  camera -- image --> brain
+  llm -- llm_response --> brain
+  audio -- speech_done --> brain
+  dora/timer/millis/500 -- tick --> brain
+  buzzer -- tool_result as tool_result_buzzer --> brain
+  hardware -- tool_result as tool_result_hardware --> brain
+  led -- tool_result as tool_result_led --> brain
+  ultrasonic -- tool_result as tool_result_ultrasonic --> brain
+  audio -- user_text --> brain
+  audio -- wake --> brain
+  brain -- tool_call --> buzzer
+  brain -- capture --> camera
+  dora/timer/secs/2 -- tick --> hardware
+  brain -- tool_call --> hardware
+  brain -- emotion --> led
+  audio -- speech_state --> led
+  brain -- tool_call --> led
+  brain -- llm_request --> llm
+  dora/timer/secs/1 -- tick --> ultrasonic
+  brain -- tool_call --> ultrasonic
+
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <script>mermaid.initialize({ startOnLoad: true, securityLevel: 'loose', theme: 'base' });
+    </script>
+</body>
+
+</html>

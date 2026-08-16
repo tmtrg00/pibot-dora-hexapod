@@ -1,5 +1,18 @@
+# Virtual environment
 venv/
+
+# Python cache
 __pycache__/
 *.py[cod]
+
+# Runtime data
+/data/*
+!/data/.gitkeep
+
+# dora run output
 out/
 dataflow-graph.html
+
+# Secrets
+.env
+.passphrase

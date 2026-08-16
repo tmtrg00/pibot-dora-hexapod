@@ -2,12 +2,16 @@
 
 Three jobs:
 
-1. `bootstrap()` — make a dora node process look exactly like the original
-   single-process runtime: chdir into the upstream project root and put it on
-   `sys.path`, so every relative path baked into the upstream code
-   (`config/config.yaml`, `point.txt`, `data/*`, `.env`) resolves unchanged.
-   This is what lets us import and reuse `src.control`, `src.actions`, etc.
-   instead of forking 5,900 lines of driver code.
+1. `bootstrap()` — chdir into this project's root and put it on `sys.path`, so
+   every relative path baked into the driver code (`config/config.yaml`,
+   `point.txt`, `data/*`, `.env`) resolves, and `src.control`, `src.actions`
+   etc. import.
+
+   This project is self-contained: `src/`, `config/`, `point.txt` and
+   `params.json` live here and it runs with `/opt/pibot-hexapod` deleted. The
+   cost of that independence is that the drivers and the servo calibration are
+   now a *copy* — fixes on either side do not reach the other. See
+   docs/RUNBOOKS.md for how to re-sync them deliberately.
 
 2. Message encoding. Dora carries Arrow arrays; we standardise on a single
    JSON string element. Chatty, low-rate control messages are far easier to
@@ -32,30 +36,39 @@ from typing import Any, Dict, List, Optional
 
 import pyarrow as pa
 
-# Root of the upstream (non-dora) project. Every node reuses its drivers,
-# config, servo calibration and data directory. Override to point at a fork.
-PIBOT_HOME = os.environ.get("PIBOT_HOME", "/opt/pibot-hexapod")
+# This project's own root: /opt/pibot-dora, the parent of nodes/. Derived from
+# this file's location rather than hardcoded, so the project can be moved or
+# cloned elsewhere without editing anything. PIBOT_HOME still overrides, which
+# is what lets a node run against a different checkout.
+PROJECT_ROOT = os.environ.get(
+    "PIBOT_HOME",
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+)
+
+# Retained under the old name so existing scripts and docs keep working.
+PIBOT_HOME = PROJECT_ROOT
 
 _BOOTSTRAPPED = False
 
 
 def bootstrap() -> str:
-    """Make the upstream project importable and its relative paths valid.
+    """Make this project importable and its relative paths valid.
 
     Idempotent. Returns the project root.
     """
     global _BOOTSTRAPPED
     if not _BOOTSTRAPPED:
-        if not os.path.isdir(os.path.join(PIBOT_HOME, "src")):
+        if not os.path.isdir(os.path.join(PROJECT_ROOT, "src")):
             raise RuntimeError(
-                f"PIBOT_HOME={PIBOT_HOME!r} does not look like the PiBot-Hexapod "
-                f"project (no src/ directory). Set PIBOT_HOME correctly."
+                f"{PROJECT_ROOT!r} has no src/ directory, so the robot drivers "
+                f"cannot be imported. If PIBOT_HOME is set, check it points at a "
+                f"full checkout."
             )
-        if PIBOT_HOME not in sys.path:
-            sys.path.insert(0, PIBOT_HOME)
-        os.chdir(PIBOT_HOME)
+        if PROJECT_ROOT not in sys.path:
+            sys.path.insert(0, PROJECT_ROOT)
+        os.chdir(PROJECT_ROOT)
         _BOOTSTRAPPED = True
-    return PIBOT_HOME
+    return PROJECT_ROOT
 
 
 def get_logger(name: str) -> logging.Logger:

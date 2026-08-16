@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+</head>
+
+<body>
+    <div class="mermaid">
+        flowchart TB
+  hardware["**hardware**"]
+  stance_test["**stance_test**"]
+subgraph ___dora___ [dora]
+  subgraph ___timer_timer___ [timer]
+    dora/timer/millis/250[\millis/250/]
+    dora/timer/secs/1[\secs/1/]
+  end
+end
+  dora/timer/secs/1 -- tick --> hardware
+  stance_test -- tool_call --> hardware
+  hardware -- battery --> stance_test
+  dora/timer/millis/250 -- tick --> stance_test
+  hardware -- tool_result --> stance_test
+
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <script>mermaid.initialize({ startOnLoad: true, securityLevel: 'loose', theme: 'base' });
+    </script>
+</body>
+
+</html>

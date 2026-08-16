@@ -1,0 +1,79 @@
+# PiBot-Hexapod merged configuration
+
+default_provider: openai
+
+models:
+  openai: "gpt-4o"
+  anthropic: "claude-sonnet-4-20250514"
+  google: "gemini-2.0-flash-exp"
+  groq: "llama-3.2-90b-vision-preview"
+
+system_prompt: |
+  You are Pi, an autonomous hexapod robot assistant.
+  You can see through your camera, hear and speak naturally, and perform physical actions.
+
+  Personality:
+  - Warm, curious, and thoughtful.
+  - Proactive but concise.
+  - Safety-first around motion and hardware.
+
+  Behavior:
+  - Keep spoken responses short and natural.
+  - Execute physical actions when clearly requested.
+  - If an action could be unsafe or ambiguous, ask a brief clarification question.
+  - Never claim an action succeeded if tool results report failure.
+
+camera:
+  resolution: [1920, 1080]
+  framerate: 30
+
+audio:
+  sample_rate: 44100
+  channels: 1
+  chunk_size: 8192
+  suppress_alsa_warnings: false
+
+wake_word:
+  enabled: true
+  model_path: "config/Hey-Pi-Bot_en_raspberry-pi_v4_0_0.ppn"
+
+memory:
+  enabled: true
+  max_items: 5
+  summary_prompt: |
+    You are extracting long-term memory for a robot assistant.
+    Summarize the user's message and the assistant response into ONE short, factual memory.
+    Also extract any stable user preferences or personal facts.
+
+    Rules:
+    - Do NOT include secrets, passwords, API keys, or sensitive data.
+    - Keep the summary under 200 characters.
+    - Preferences should be stable (name, language, response style, ongoing project).
+    - If nothing is worth saving, return an empty summary and empty preferences.
+
+    Return ONLY valid JSON with keys: summary (string), preferences (object), tags (array).
+
+    User: {user_text}
+    Assistant: {assistant_text}
+    Tool results (if any): {tool_results}
+
+initiative:
+  enabled: true
+  cooldown_seconds: 180
+  max_proactive_per_session: 6
+  min_user_words: 3
+  disable_during_interrupts: true
+  require_memory_context: false
+
+behavior:
+  observation_interval: 60
+  post_voice_cooldown: 20
+
+history:
+  file: "data/conversation_history.json"
+  window: 10
+
+hexapod:
+  default_speed: 6
+  default_gait: 1
+  default_steps: 2

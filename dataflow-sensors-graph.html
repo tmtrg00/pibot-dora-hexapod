@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+</head>
+
+<body>
+    <div class="mermaid">
+        flowchart TB
+  hardware["**hardware**"]
+  led["**led**"]
+  probe["**probe**"]
+  ultrasonic["**ultrasonic**"]
+subgraph ___dora___ [dora]
+  subgraph ___timer_timer___ [timer]
+    dora/timer/secs/1[\secs/1/]
+    dora/timer/secs/2[\secs/2/]
+    dora/timer/secs/3[\secs/3/]
+  end
+end
+  dora/timer/secs/2 -- tick --> hardware
+  probe -- emotion --> led
+  hardware -- battery --> probe
+  ultrasonic -- distance --> probe
+  hardware -- health --> probe
+  dora/timer/secs/3 -- tick --> probe
+  dora/timer/secs/1 -- tick --> ultrasonic
+
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <script>mermaid.initialize({ startOnLoad: true, securityLevel: 'loose', theme: 'base' });
+    </script>
+</body>
+
+</html>

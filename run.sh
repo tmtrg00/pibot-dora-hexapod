@@ -16,7 +16,6 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE"
 
-export PIBOT_HOME="${PIBOT_HOME:-/opt/pibot-hexapod}"
 export PATH="$HERE/venv/bin:$PATH"
 
 case "${1:-full}" in
@@ -34,9 +33,14 @@ if [[ ! -f "$DATAFLOW" ]]; then
   exit 1
 fi
 
-if [[ ! -d "$PIBOT_HOME/src" ]]; then
-  echo "PIBOT_HOME=$PIBOT_HOME does not contain the upstream project (no src/)." >&2
+if [[ ! -d "$HERE/src" ]]; then
+  echo "No src/ directory in $HERE — the robot drivers are missing." >&2
   exit 1
+fi
+
+if [[ ! -f "$HERE/.env" ]]; then
+  echo "WARNING: no .env — OPENAI_API_KEY and PICOVOICE_ACCESS_KEY are unset." >&2
+  echo "         Sensor, motion, turn and stance graphs still work." >&2
 fi
 
 # Refuse to start on top of a previous run's orphans — they own the hardware
@@ -50,7 +54,7 @@ cleanup() { ./stop.sh >/dev/null 2>&1 || true; }
 trap cleanup EXIT INT TERM
 
 echo "dataflow : $DATAFLOW"
-echo "upstream : $PIBOT_HOME"
+echo "project  : $HERE"
 echo
 
 "$HERE/venv/bin/dora" run "$DATAFLOW"
