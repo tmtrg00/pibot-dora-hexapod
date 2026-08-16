@@ -36,10 +36,14 @@ tells you something.
   `cp /opt/pibot-hexapod/.env /opt/pibot-dora/.env && chmod 600 /opt/pibot-dora/.env`
   (RUNBOOKS §8).
 
-- [TODO 2026-08-16] **Verify the full autonomous graph end to end.** Every node has been
-  exercised except `audio`, `llm` and `brain`, which have never run against real hardware —
-  the wake word, Whisper, GPT-4o, tool dispatch, TTS and barge-in path is entirely unproven.
-  Needs `.env`, a charged pack and accepts API spend.
+- [TODO 2026-08-16] **Verify the full autonomous graph end to end.** Four of the eight nodes
+  have never run against real hardware: `audio`, `llm`, `brain` and `buzzer`. The wake word,
+  Whisper, GPT-4o, tool dispatch, TTS and barge-in path is entirely unproven. `buzzer` is the
+  easy one to miss — it appears only in `dataflow.yml` and in no single-purpose test graph, so
+  unlike the others it is not covered even indirectly. Note also that every test graph
+  substitutes a test node for the brain, so no graph has yet exercised `brain` talking to
+  anything, and the behaviour state machine that replaced the `while True` loop in
+  `src/main.py` has never executed. Needs `.env`, a charged pack and accepts API spend.
 
 ## Pinned for later
 
