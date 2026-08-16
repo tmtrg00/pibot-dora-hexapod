@@ -1,0 +1,55 @@
+# Sensors-only graph — the safe first test.
+#
+# Brings up dora, the I2C bus, the ultrasonic sensor and the LED strip, and
+# exercises message passing end to end. Deliberately excludes:
+#   * the brain      — so nothing ever issues a motion command
+#   * audio and llm  — so no microphone contention and no API spend
+#
+# The hardware node runs with PIBOT_NO_MOTION=1, so it brings up the ADC for
+# battery telemetry but never constructs Control() — nothing in this graph can
+# drive a servo. Safe to run on a bench or with the robot in any position.
+#
+# Run:  ./run.sh sensors
+
+nodes:
+  - id: hardware
+    path: bin/py
+    args: nodes/hardware_node.py
+    env:
+      # Telemetry only: read the battery, never construct Control(), so nothing
+      # in this graph can move a servo.
+      PIBOT_NO_MOTION: "1"
+    inputs:
+      tick: dora/timer/millis/2000
+    outputs:
+      - battery
+      - health
+      - tool_result
+
+  - id: ultrasonic
+    path: bin/py
+    args: nodes/ultrasonic_node.py
+    inputs:
+      tick: dora/timer/millis/1000
+    outputs:
+      - distance
+      - tool_result
+
+  - id: led
+    path: bin/py
+    args: nodes/led_node.py
+    inputs:
+      emotion: probe/emotion
+    outputs:
+      - tool_result
+
+  - id: probe
+    path: bin/py
+    args: nodes/probe_node.py
+    inputs:
+      tick: dora/timer/millis/3000
+      battery: hardware/battery
+      health: hardware/health
+      distance: ultrasonic/distance
+    outputs:
+      - emotion

@@ -1,0 +1,112 @@
+# Full autonomous graph — the dora equivalent of `python src/main.py`.
+#
+# Device ownership (one process each, so a stall in one cannot stall another):
+#   hardware   I2C bus: both PCA9685 servo drivers, MPU6050 IMU, ADS7830 ADC,
+#              plus the gait thread. Fused because they share one bus.
+#   audio      mic + speaker: Porcupine wake word, VAD, Whisper, TTS
+#   llm        OpenAI calls + SQLite long-term memory
+#   camera     picamera2 (CSI)
+#   led        WS2812B over SPI
+#   ultrasonic HC-SR04 on GPIO 27/22
+#   buzzer     GPIO buzzer
+#   brain      no hardware at all — pure behaviour state machine
+#
+# Tool calls are broadcast from the brain on one stream; each device node
+# ignores the ones it does not own (see nodes/common.py TOOL_OWNER). Results
+# come back on per-node streams because dora maps each input id to exactly one
+# source; the brain treats every `tool_result_*` input identically.
+#
+# Run:  ./run.sh
+
+nodes:
+  - id: brain
+    path: bin/py
+    args: nodes/brain_node.py
+    inputs:
+      tick: dora/timer/millis/500
+      wake: audio/wake
+      user_text: audio/user_text
+      speech_done: audio/speech_done
+      llm_response: llm/llm_response
+      image: camera/image
+      distance: ultrasonic/distance
+      battery: hardware/battery
+      health: hardware/health
+      tool_result_hardware: hardware/tool_result
+      tool_result_led: led/tool_result
+      tool_result_ultrasonic: ultrasonic/tool_result
+      tool_result_buzzer: buzzer/tool_result
+    outputs:
+      - speak
+      - listen
+      - tool_call
+      - emotion
+      - llm_request
+      - capture
+
+  - id: audio
+    path: bin/py
+    args: nodes/audio_node.py
+    inputs:
+      speak: brain/speak
+      listen: brain/listen
+    outputs:
+      - wake
+      - user_text
+      - speech_state
+      - speech_done
+
+  - id: llm
+    path: bin/py
+    args: nodes/llm_node.py
+    inputs:
+      llm_request: brain/llm_request
+    outputs:
+      - llm_response
+
+  - id: hardware
+    path: bin/py
+    args: nodes/hardware_node.py
+    inputs:
+      tick: dora/timer/millis/2000
+      tool_call: brain/tool_call
+    outputs:
+      - battery
+      - health
+      - tool_result
+
+  - id: camera
+    path: bin/py
+    args: nodes/camera_node.py
+    inputs:
+      capture: brain/capture
+    outputs:
+      - image
+
+  - id: led
+    path: bin/py
+    args: nodes/led_node.py
+    inputs:
+      emotion: brain/emotion
+      speech_state: audio/speech_state
+      tool_call: brain/tool_call
+    outputs:
+      - tool_result
+
+  - id: ultrasonic
+    path: bin/py
+    args: nodes/ultrasonic_node.py
+    inputs:
+      tick: dora/timer/millis/1000
+      tool_call: brain/tool_call
+    outputs:
+      - distance
+      - tool_result
+
+  - id: buzzer
+    path: bin/py
+    args: nodes/buzzer_node.py
+    inputs:
+      tool_call: brain/tool_call
+    outputs:
+      - tool_result

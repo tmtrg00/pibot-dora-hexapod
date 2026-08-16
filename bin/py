@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Node launcher.
+#
+# dora resolves a node whose `args` ends in .py with the *system* python and
+# ignores whatever interpreter `path` names, which would miss this project's
+# venv entirely. Naming this wrapper as the node `path` makes dora exec it as a
+# plain binary, so the venv interpreter is the one that actually runs.
+exec /opt/pibot-dora/venv/bin/python "$@"
