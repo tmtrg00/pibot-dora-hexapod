@@ -19,16 +19,20 @@ tells you something.
   - Blocks: a complete 360° turn (needs ~47 gait cycles, roughly double what has been run),
     the full stance cycle without aborting, and any walking test.
 
-- [PINNED 2026-08-16] **Camera produces no frames — the Pi 5 RP1 CSI-2 receive path is
-  defective; the board needs replacing.** Inherited from the upstream project, confirmed
-  independently here: the IMX708 enumerates and libcamera opens, configures and starts it, then
-  every capture times out with `Camera frontend has timed out`. Not a software problem and not
-  fixable here.
-  - Check state: `libcamera-hello --list-cameras` enumerates the sensor; `./run.sh camera`
+- [PINNED 2026-08-16] **Camera produces no frames — the CSI-2 physical link carries no data.
+  Software has been exhaustively eliminated; replace the ribbon cable first, then the camera
+  module, then the board.** The IMX708 enumerates and libcamera opens, configures and starts
+  it, then every capture times out with `Camera frontend has timed out`.
+  - Check state: `rpicam-hello --list-cameras` enumerates the sensor; `./run.sh camera`
     fails all three attempts in 8s each and disables the camera.
-  - The node needs no change when a working board arrives.
+  - The node needs no change when working hardware arrives.
   - Blocks: vision-guided obstacle avoidance, the autonomous observation loop, and the
     responsiveness comparison that MASTERPLAN makes the definition of success.
+  - **Do not re-investigate in software.** The 2026-08-16 CHANGELOG entry records the full
+    elimination, including the decisive test: the sensor's own internal colour-bar generator,
+    which synthesises data on-chip with the lens and exposure path irrelevant, also delivers
+    zero bytes. Re-running libcamera, swapping drivers or editing `config.txt` cannot fix
+    this and the evidence for that is already recorded.
 
 - [TODO 2026-08-16] **Copy `.env` into this project.** The fork carried `src/`, `config/` and
   the calibration but not the secrets, so `OPENAI_API_KEY` and `PICOVOICE_ACCESS_KEY` are

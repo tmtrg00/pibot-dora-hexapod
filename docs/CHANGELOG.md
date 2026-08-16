@@ -7,6 +7,66 @@ revert an old entry.
 
 ---
 
+## 2026-08-16 — Eliminated software as the cause of the camera failure, down to the sensor's own test pattern
+
+Investigated the camera fault outside the dora graph entirely, on the explicit premise that it
+was a software problem to be fixed in software. It is not. The premise was tested to
+destruction and the elimination is recorded here so nobody spends another session on it.
+
+What works, and it is a lot: `rpicam-hello --list-cameras` enumerates the IMX708 with all
+three modes; the kernel reads `camera module ID 0x0301` over I²C; the `rp1-cfe` driver binds,
+registers eight video nodes and finds the subdevice; the media graph is complete and correct
+(`imx708 → csi2 → pisp-fe → fe_image0`, every link `ENABLED`, formats propagating as
+`SBGGR10_1X10/2304x1296`); and with dynamic debug enabled the driver is seen to configure the
+CSI-2 block for 2 data lanes at 900 Mbps, then log `Starting sensor streaming`, which returns
+successfully in 124 ms with no I²C error. One second later the dequeue timer expires.
+
+**Fix:** none available. Every layer that software controls was eliminated by test, not by
+argument:
+
+- Not the ISP. Rerouting the media graph to bypass the PiSP front-end entirely and capturing
+  raw from `rp1-cfe-csi2_ch0` with `v4l2-ctl` produced a zero-byte file.
+- Not the sensor mode. All three modes — 1536x864, 2304x1296, 4608x2592 — fail identically.
+- Not driver state. Unloading and re-probing `rp1_cfe_downstream`, `imx708` and `dw9807_vcm`
+  re-registered everything cleanly and changed nothing.
+- Not permissions. The account is in `video` (gid 44) with verified read/write on every
+  `/dev/video*` and `/dev/media*` node, and the failure occurs at buffer dequeue, long after
+  the `open()` a permission fault would have blocked.
+- Not the imaging path. **The decisive test:** the IMX708's internal colour-bar generator
+  (`test_pattern=1` on the sensor subdev) synthesises data on-chip and transmits it over
+  CSI-2 with the lens, exposure and gain path irrelevant. It also delivered zero bytes.
+
+The D-PHY reports no CRC, ECC, lane or overflow errors at any point — not corrupt data, but
+total silence. A marginal cable usually produces errors; silence means no valid high-speed
+transitions are reaching the receiver at all.
+
+**Decision:** the camera fault is hardware and this supersedes the framing in the previous
+PENDING entry, which asserted a defective RP1 CSI-2 receive path and a board replacement. That
+conclusion was stronger than its evidence. What is proven is narrower and more useful: the
+control plane (I²C) works end to end and the data plane (the CSI-2 differential pairs) carries
+nothing. Those share one ribbon cable but different conductors, and the high-speed pairs are
+far more sensitive to a partially-seated or flexed connector — a real risk here, since the
+camera rides a pan/tilt head that flexes the cable in service. Replacement order is therefore
+**cable, then camera module, then board**, cheapest and likeliest first. The test-pattern
+result narrows it to the sensor's MIPI transmitter, the cable, or the RP1 receiver, and cannot
+distinguish between those three from software.
+
+One software avenue remains untested and was deliberately not taken: kernel 6.17.0-1003-raspi
+is still installed and staged in `/boot/firmware/old/` as `vmlinuz.bak-1003`, so a regression
+in Ubuntu's 6.17.0-1021 `rp1-cfe` backport could in principle be ruled out by booting it. That
+requires editing `config.txt` and rebooting a headless robot, which risks an unbootable machine
+needing physical card access, and it must not be done with the servo rail energised. Given the
+test-pattern result, the expected value is low. It is recorded as an option, not a plan.
+
+**Noted in passing:** Ubuntu ships two CFE drivers — `rp1-cfe-downstream.ko` (bound here, via
+DT compatible `raspberrypi,rp1-cfe`) and the upstream `rp1-cfe.ko` (compatible
+`raspberrypi,rp1-cfe-upstream`). Switching would need a DT overlay, and upstream's multi-stream
+handling is less complete, so it is not a fix. The downstream driver does emit a kernel WARNING
+at `v4l2-subdev.c:462` in `call_s_stream` on the stop path when a capture is killed; that is
+stream-state bookkeeping noise on teardown, not the cause.
+
+---
+
 ## 2026-08-16 — Forked to a fully standalone project with its own documentation structure
 
 Copied `src/`, `config/`, `test/`, `point.txt`, `params.json` and `requirements.txt` out of
