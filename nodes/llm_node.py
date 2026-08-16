@@ -28,7 +28,14 @@ import threading
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import common
-from common import decode, encode, get_logger, load_config, tool_calls_to_dicts
+from common import (
+    decode,
+    encode,
+    get_logger,
+    load_config,
+    stance_tool_schema,
+    tool_calls_to_dicts,
+)
 
 common.bootstrap()
 
@@ -45,6 +52,10 @@ from src.voice import (  # noqa: E402
 
 NODE = "llm"
 logger = get_logger(NODE)
+
+# The upstream 13 tools plus set_stance, which this project adds without
+# touching src/actions.py.
+TOOL_SCHEMAS = list(TOOLS) + [stance_tool_schema()]
 
 
 def main() -> None:
@@ -90,7 +101,7 @@ def main() -> None:
 
         result = llm.query(
             user_text,
-            tools=TOOLS,
+            tools=TOOL_SCHEMAS,
             history=req.get("history") or [],
             memory_context=memory_context,
             turn_instructions=turn_instructions,

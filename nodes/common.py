@@ -115,6 +115,7 @@ TOOL_OWNER: Dict[str, str] = {
     "dance": "hardware",
     "move_head": "hardware",
     "get_battery": "hardware",
+    "set_stance": "hardware",
     "set_led": "led",
     "buzz": "buzzer",
     "get_distance": "ultrasonic",
@@ -131,7 +132,41 @@ MOTION_TOOLS = {
     "stand",
     "dance",
     "move_head",
+    "set_stance",
 }
+
+
+def stance_tool_schema() -> Dict[str, Any]:
+    """OpenAI tool schema for set_stance, appended to the upstream TOOLS list.
+
+    Defined here rather than in src/actions.py because the stance work lives in
+    this project and the upstream tool list is left untouched.
+    """
+    import stances
+
+    names = sorted(stances.STANCES)
+    described = "; ".join(f"{n}: {stances.STANCES[n].description}" for n in names)
+    return {
+        "type": "function",
+        "function": {
+            "name": "set_stance",
+            "description": (
+                "Adopt a named body stance, changing ride height, foot spread and "
+                f"tilt together. Available stances -- {described}."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "stance": {
+                        "type": "string",
+                        "enum": names,
+                        "description": "Which stance to adopt.",
+                    }
+                },
+                "required": ["stance"],
+            },
+        },
+    }
 
 # Volts. Below this the servos brown out mid-lift and the robot drops onto its
 # own legs; deep-discharging the 2S pack can kill it.

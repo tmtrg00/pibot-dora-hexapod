@@ -22,6 +22,7 @@ binding pre-flight rule in code rather than by convention — no motion below
 
 from __future__ import annotations
 
+import math
 import os
 import sys
 import time
@@ -41,9 +42,12 @@ from common import (
 
 common.bootstrap()
 
+import stances  # noqa: E402
+
 from dora import Node  # noqa: E402
 from src.actions import execute as run_action  # noqa: E402
 from src.adc import ADC  # noqa: E402
+from src.command import COMMAND as cmd  # noqa: E402
 from src.control import Control  # noqa: E402
 
 NODE = "hardware"
@@ -139,6 +143,70 @@ class Hardware:
     def gait_thread_alive(self) -> bool:
         return self.control is not None and self.control.condition_thread.is_alive()
 
+    def apply_stance(self, name: str) -> str:
+        """Move to a named stance, verifying it actually took effect."""
+        stance = stances.STANCES.get(str(name).strip().lower())
+        if stance is None:
+            return f"Unknown stance {name!r}. Available: {', '.join(sorted(stances.STANCES))}"
+
+        ok, reaches, reason = stances.validate(stance)
+        if not ok:
+            return f"Stance {stance.name!r} rejected: {reason}"
+
+        # The geometry in stances.py is a mirror of control.py; make sure it has
+        # not drifted before trusting the reach check we just did.
+        matched, detail = stances.verify_against(self.control)
+        if not matched:
+            return f"Stance {stance.name!r} refused: {detail}"
+
+        control = self.control
+        footprint = stance.footprint()
+        previous = [[p[0], p[1]] for p in control.body_points]
+
+        # Widen or narrow the resting footprint. run_gait deep-copies
+        # body_points, so this changes the walking gait too.
+        for i, (x, y) in enumerate(footprint):
+            control.body_points[i][0] = x
+            control.body_points[i][1] = y
+
+        def queue(parts, timeout_s=15.0):
+            control.command_queue = parts
+            control.timeout = time.time()
+            end = time.time() + timeout_s
+            while time.time() < end:
+                queue_now = getattr(control, "command_queue", None)
+                if isinstance(queue_now, list) and queue_now and queue_now[0] == "":
+                    return True
+                time.sleep(0.05)
+            return False
+
+        completed = queue([cmd.CMD_POSITION, "0", "0", str(stance.z)])
+        if stance.roll or stance.pitch:
+            completed = queue([cmd.CMD_ATTITUDE, str(stance.roll), str(stance.pitch), "0"]) and completed
+
+        # set_leg_angles() silently declines to move if a leg is out of range,
+        # so confirm against the robot's own validity check rather than
+        # assuming the command landed.
+        moved = control.check_point_validity()
+        if not moved:
+            for i, (x, y) in enumerate(previous):
+                control.body_points[i][0] = x
+                control.body_points[i][1] = y
+            return (
+                f"Stance {stance.name!r} FAILED: the robot reports its leg positions "
+                f"out of range, so nothing moved. Footprint reverted."
+            )
+
+        actual = max(
+            math.sqrt(p[0] ** 2 + p[1] ** 2 + p[2] ** 2) for p in control.leg_positions
+        )
+        note = "" if completed else " (timed out waiting for the gait thread)"
+        return (
+            f"Stance set to {stance.name!r}: {stance.description}. "
+            f"spread={stance.spread:.2f} z={stance.z} roll={stance.roll} pitch={stance.pitch}, "
+            f"max leg reach {actual:.0f}mm (predicted {max(reaches):.0f}mm){note}"
+        )
+
     def motion_refusal(self, tool_name: str, args: dict) -> Optional[str]:
         """Return a refusal string if this motion command must not run."""
         gated = tool_name in MOTION_TOOLS
@@ -206,6 +274,24 @@ def main() -> None:
 
                 name = call["name"]
                 args = call.get("args") or {}
+
+                # set_stance is served here rather than by src/actions.py,
+                # since it manipulates Control.body_points directly.
+                if name == "set_stance":
+                    refusal = hw.motion_refusal("stand", args)
+                    text = refusal if refusal is not None else hw.apply_stance(args.get("stance", ""))
+                    node.send_output(
+                        "tool_result",
+                        encode(
+                            {
+                                "id": call.get("id"),
+                                "name": name,
+                                "text": text,
+                                "refused": refusal is not None,
+                            }
+                        ),
+                    )
+                    continue
 
                 refusal = hw.motion_refusal(name, args)
                 if refusal is not None:
