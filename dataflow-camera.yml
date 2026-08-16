@@ -1,0 +1,27 @@
+# Camera test graph. No motion, no audio, no LLM.
+#
+# Tests two separate things: whether the camera produces a frame at all (on
+# this Pi the CSI receive path is defective, so expect not), and whether the
+# graph degrades cleanly when it does not — a bounded failure with a reason,
+# not a hung node.
+#
+#   ./run.sh camera
+#   PIBOT_CAMERA_ATTEMPTS=5 ./run.sh camera
+
+nodes:
+  - id: camera
+    path: bin/py
+    args: nodes/camera_node.py
+    inputs:
+      capture: camera_test/capture
+    outputs:
+      - image
+
+  - id: camera_test
+    path: bin/py
+    args: nodes/camera_test_node.py
+    inputs:
+      tick: dora/timer/millis/500
+      image: camera/image
+    outputs:
+      - capture

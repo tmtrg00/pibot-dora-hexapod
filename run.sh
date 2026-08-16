@@ -24,6 +24,7 @@ case "${1:-full}" in
   sensors)  DATAFLOW="dataflow-sensors.yml" ;;
   motion)   DATAFLOW="dataflow-motion.yml" ;;
   turn)     DATAFLOW="dataflow-turn.yml" ;;
+  camera)   DATAFLOW="dataflow-camera.yml" ;;
   *)        DATAFLOW="$1" ;;
 esac
 

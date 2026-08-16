@@ -185,6 +185,8 @@ Not yet verified (needs hardware or spend, not code):
 - **motion** — servo power was off during this build; nothing has driven a leg
 - **ultrasonic readings** — the sensor returns no echo, but it does the same on
   the upstream code, so this is pre-existing and probably just unpowered
-- **camera** — the Pi 5 CSI receive path is defective (pinned upstream); the
+- **camera** — the Pi 5 CSI receive path is defective (pinned upstream); confirmed
+  by test, and the node now fails each capture in 8s and disables itself after 3.
+  The old text claimed clean degradation before it was true; the
   node is written to degrade cleanly and needs no change when the board is replaced
 - **the voice loop end to end** — wake word → Whisper → GPT-4o → tools → TTS
