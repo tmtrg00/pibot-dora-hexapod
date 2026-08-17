@@ -7,6 +7,28 @@ revert an old entry.
 
 ---
 
+## 2026-08-17 — Camera still dead with the Pi detached from the robot, eliminating the robot's power and wiring
+
+Retested both cameras with the Pi unplugged from the robot entirely — no servo rail, no PCA9685
+boards, no IMU, no ADC, nothing on the I2C bus, and the Pi drawing from its own supply. This was
+the last shared-environment variable left: a noisy 6V servo rail or ground loop through the
+robot chassis is a plausible way to disturb high-speed MIPI signalling while leaving low-speed
+I2C intact, and it had never been tested in isolation.
+
+It changes nothing. Both sensors enumerate on kernel 7.0.0-1016 and libcamera 0.7.0, both
+captures fail with `Dequeue timer of 1000000.00us has expired!` and `Camera frontend has timed
+out!`, no JPEG is produced, and every `CSI2_DISCARDS_*`, `CSI2_CH_DEBUG(n)` and
+`CSI2_CH_FE_FRAME_ID(n)` register on both CSI blocks reads `0x00000000` with a capture armed.
+
+**Decision: the RMA case is now complete and no further diagnosis is worth doing.** The full
+elimination list across this project and upstream is three ribbon cables, two sensor models on
+both CSI ports, a checklist reseat, a kernel A/B within 6.17, a kernel major version bump to
+7.0, libcamera 0.5 → 0.7, rpicam-apps 1.7 → 1.11, a distro release upgrade, and now the robot's
+entire electrical environment. The fault has not moved once. A Raspberry Pi OS boot remains
+available purely as vendor paperwork.
+
+---
+
 ## 2026-08-17 — Rebuilt the venv on Python 3.14, replacing the kitchen-sink requirements with the dependencies the code actually imports
 
 The 26.04 upgrade moved the interpreter to 3.14.4 while the venv's site-packages stayed at
