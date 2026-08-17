@@ -35,11 +35,26 @@ tells you something.
     which contradicts the upstream record that it "has never delivered a frame on this robot".
     Establish whether that memory is of a different Pi or a bench test before assembly. If a
     frame ever arrived on *this* board, the RMA reasoning needs revisiting.
+  - **[IN-FLIGHT 2026-08-17] Retest on the 26.04 stack — this is the immediate next action.**
+    The Pi was upgraded to Ubuntu 26.04 LTS (CHANGELOG 2026-08-17) but has **not been rebooted**,
+    so it still runs the old 6.17.0-1021 kernel. After the double reboot completes, rerun
+    `rpicam-still` on both cameras and re-read the CSI counters, and compare against the
+    all-zeros baseline. Verify `uname -r` reports 7.0.0-1016-raspi first — otherwise the test
+    proves nothing.
   - **Then the last test:** boot Raspberry Pi OS from a spare SD card and attempt one
     `rpicam-still`. This is now for warranty evidence rather than diagnosis.
   - The node needs no change either way.
   - Blocks: vision-guided obstacle avoidance, the autonomous observation loop, and the
     responsiveness comparison that MASTERPLAN makes the definition of success.
+
+- [PINNED 2026-08-17] **The project venv is broken by the Python 3.13 → 3.14 upgrade and must be
+  rebuilt before any graph runs.** Site-packages is still `venv/lib/python3.13` while the
+  interpreter is 3.14.4, so `openai`, `dotenv` and `smbus2` fail to import; `yaml` and `numpy`
+  resolve only because of `--system-site-packages`. Rebuild from `requirements.txt` (the
+  `venv-freeze.txt` backup is polluted with system packages), keeping `--system-site-packages`
+  for `lgpio`, `libcamera` and `picamera2`. Expect the `scipy`, `opencv-python`, `numpy` and
+  `RPi.GPIO` pins to need attention on 3.14 — prefer the system packages where they exist.
+  Blocks every `./run.sh` graph.
 
 - [TODO 2026-08-16] **Copy `.env` into this project.** The fork carried `src/`, `config/` and
   the calibration but not the secrets, so `OPENAI_API_KEY` and `PICOVOICE_ACCESS_KEY` are

@@ -7,6 +7,55 @@ revert an old entry.
 
 ---
 
+## 2026-08-17 — Upgraded the Pi to Ubuntu 26.04 LTS to eliminate the camera software stack, and found why the kernel had been frozen
+
+Upgraded 25.10 "questing" to 26.04 LTS "resolute" at the owner's explicit instruction, to rule
+out the software stack in the camera investigation rather than argue it away. 25.10 had also
+gone end of life, so the box was unpatched regardless.
+
+`do-release-upgrade` refused to start at first, reporting only "Please install all available
+updates for your release before upgrading" — **186 pending security updates** had to be
+installed first. That refusal is quiet and easy to misread as a broken command; the real error
+only appears when the tool is run with stdin attached to something it can inspect.
+
+**Fix (likely the long-standing one):** the A/B boot rotation was blocked by a stale directory.
+Promotion runs `mv /boot/firmware/new /boot/firmware/old`, which silently moves `new` *inside*
+`old/` as `old/new` when `old/` already exists, instead of rotating the slots. `old/` did
+exist, holding a kernel byte-identical to `current/`. It was moved off the partition to free
+space for the upgrade, which incidentally cleared the blockage. This is a credible root cause
+for the frozen-kernel behaviour recorded upstream on 2026-08-16, where apt's kernel upgrades
+never reached `/boot/firmware/current/` and the Pi booted a months-old snapshot.
+
+Versions crossed, which is a far larger change than the 6.17.0-1003 → 1021 A/B upstream already
+tested: kernel 6.17.0-1021 → **7.0.0-1016-raspi**, libcamera 0.5.0 → **0.7.0**, rpicam-apps
+1.7.0 → **1.11.1**, picamera2 0.3.23, Python 3.13.7 → **3.14.4**. The boot tooling changed too:
+`flash-kernel` was removed in favour of `flash-kernel-piboot` plus `piboot-try`, whose
+`piboot-try-reboot` and `piboot-try-validate` units automate the tryboot-and-promote cycle.
+The next restart is therefore a **double** reboot by design.
+
+**Correction to an earlier claim in this session:** `archive.ubuntu.com` was flagged as wrong
+for arm64 when the upgrader rewrote the sources away from `ports.ubuntu.com`. That was checked
+before acting and is false — `archive.ubuntu.com` returns HTTP 200 for
+`dists/resolute/main/binary-arm64/Packages.gz`. The archives have been consolidated. No change
+was made and nothing was broken.
+
+**Not yet verified, and the whole point of the exercise:** the camera has not been retested. The
+Pi is still running the old 6.17.0-1021 kernel because the reboot has not happened. The
+prediction on record is that it fails identically — zero MIPI packets and zero discards is a
+statement about electrical activity, not software — but the test is the test.
+
+**Known breakage:** the project venv is dead. Its site-packages is `lib/python3.13` while the
+interpreter is now 3.14.4, so `openai`, `dotenv` and `smbus2` no longer import (`yaml` and
+`numpy` still resolve only via `--system-site-packages`). Rebuild from `requirements.txt`, not
+from the `venv-freeze.txt` backup, which is polluted with system packages. Expect friction on
+the `scipy`, `opencv-python`, `numpy` and `RPi.GPIO` pins under 3.14.
+
+Pre-upgrade backups are in `/opt/pibot-backup-preupgrade-2026-08-17`: a 290 MB tarball of the
+whole boot partition, `/etc`, `dpkg --get-selections`, the venv freeze, and the original
+`config.txt` / `cmdline.txt` / `autoboot.txt`, plus the displaced `old/` slot.
+
+---
+
 ## 2026-08-17 — Register-level check confirms zero MIPI packets on both CSI blocks, retiring the software hypothesis
 
 Followed up the dual-port test by reading the RP1 CSI-2 receiver counters directly, with a
