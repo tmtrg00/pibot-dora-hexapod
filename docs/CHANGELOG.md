@@ -7,6 +7,52 @@ revert an old entry.
 
 ---
 
+## 2026-08-17 — Merged the parallel camera investigation and retracted its hardware verdict: do not buy a cable, a camera module or a board
+
+Merged `origin/main`, which carried a parallel investigation from 2026-08-16 that this branch
+had not seen. Both histories are preserved intact and in date order; nothing was edited or
+reverted.
+
+**Decision: this supersedes the decision in the 2026-08-16 entry "Eliminated software as the
+cause of the camera failure, down to the sensor's own test pattern".** That entry concluded the
+fault is hardware and set a replacement order of **cable, then camera module, then board**.
+**That order should not be acted on. Do not buy any of the three.** The camera captures
+successfully on Raspberry Pi OS on this same board, with these same cables and both sensors
+(this file, 2026-08-17), so no component in the chain is faulty.
+
+**Why its decisive test did not decide.** The strongest evidence in that entry was the IMX708's
+internal colour-bar generator (`test_pattern=1`), which synthesises frames on-chip and
+transmits them over CSI-2 with the lens, exposure and gain path irrelevant — and which also
+delivered zero bytes. The inference drawn was that the fault must lie in the sensor's MIPI
+transmitter, the cable, or the RP1 receiver, since software had been removed from the picture.
+The gap is that the test pattern still requires the sensor to be *streaming*: the on-chip
+generator replaces the image source, not the transmitter, and not the software that commands
+the transmitter on. If the Ubuntu stack fails somewhere in the streaming-start sequence, the
+test pattern produces nothing for exactly the same reason a real scene does. The test isolates
+the imaging path, which it genuinely did; it does not isolate software, which is what it was
+credited with.
+
+The same correction applies to the D-PHY error counters reported there, and to this branch's
+own zero-packet reading — silence rather than corruption was read as proof that no valid
+high-speed transitions arrive, when it is equally consistent with a transmitter never being
+started. Two independent sessions reached the same wrong conclusion from the same class of
+evidence, which is worth remembering: **absence of error counts is not evidence of a dead
+receiver.**
+
+What that entry got right and still stands: the control plane works end to end while the data
+plane carries nothing; the media graph is complete and correctly formatted; the ISP, sensor
+mode, driver state and permissions are all eliminated; and its narrower framing that the
+earlier "defective RP1 receive path" claim was "stronger than its evidence" was the correct
+instinct, applied one step short of far enough.
+
+Of the two software avenues it left open, the kernel regression test has since been overtaken —
+this branch crossed 6.17.0-1021 to 7.0.0-1016 and a full distro upgrade with no change. The
+`imx708` overlay `link-frequency` variants (447/450/453 MHz) remain untried, but they exist to
+rescue a marginal link, and Raspberry Pi OS works on this hardware at the default frequency, so
+there is no marginal link to rescue.
+
+---
+
 ## 2026-08-17 — Cleaned up the camera investigation: vendor libcamera removed, build trees and pre-upgrade backups deleted
 
 Reverted the system to stock after the investigation closed, freeing about 1 GB.
@@ -425,6 +471,79 @@ present exactly as observed. Booting Raspberry Pi OS from a spare card and attem
 capture is a cheap test that discriminates the two and should be run before any board is
 bought; it is recorded in PENDING. This supersedes nothing in the 2026-08-16 entry — the
 symptom and the "not fixable in this project" conclusion are unchanged.
+## 2026-08-16 — Eliminated software as the cause of the camera failure, down to the sensor's own test pattern
+
+Investigated the camera fault outside the dora graph entirely, on the explicit premise that it
+was a software problem to be fixed in software. It is not. The premise was tested to
+destruction and the elimination is recorded here so nobody spends another session on it.
+
+What works, and it is a lot: `rpicam-hello --list-cameras` enumerates the IMX708 with all
+three modes; the kernel reads `camera module ID 0x0301` over I²C; the `rp1-cfe` driver binds,
+registers eight video nodes and finds the subdevice; the media graph is complete and correct
+(`imx708 → csi2 → pisp-fe → fe_image0`, every link `ENABLED`, formats propagating as
+`SBGGR10_1X10/2304x1296`); and with dynamic debug enabled the driver is seen to configure the
+CSI-2 block for 2 data lanes at 900 Mbps, then log `Starting sensor streaming`, which returns
+successfully in 124 ms with no I²C error. One second later the dequeue timer expires.
+
+**Fix:** none available. Every layer that software controls was eliminated by test, not by
+argument:
+
+- Not the ISP. Rerouting the media graph to bypass the PiSP front-end entirely and capturing
+  raw from `rp1-cfe-csi2_ch0` with `v4l2-ctl` produced a zero-byte file.
+- Not the sensor mode. All three modes — 1536x864, 2304x1296, 4608x2592 — fail identically.
+- Not driver state. Unloading and re-probing `rp1_cfe_downstream`, `imx708` and `dw9807_vcm`
+  re-registered everything cleanly and changed nothing.
+- Not permissions. The account is in `video` (gid 44) with verified read/write on every
+  `/dev/video*` and `/dev/media*` node, and the failure occurs at buffer dequeue, long after
+  the `open()` a permission fault would have blocked.
+- Not the imaging path. **The decisive test:** the IMX708's internal colour-bar generator
+  (`test_pattern=1` on the sensor subdev) synthesises data on-chip and transmits it over
+  CSI-2 with the lens, exposure and gain path irrelevant. It also delivered zero bytes.
+
+The D-PHY reports no CRC, ECC, lane or overflow errors at any point — not corrupt data, but
+total silence. A marginal cable usually produces errors; silence means no valid high-speed
+transitions are reaching the receiver at all.
+
+**Decision:** the camera fault is hardware and this supersedes the framing in the previous
+PENDING entry, which asserted a defective RP1 CSI-2 receive path and a board replacement. That
+conclusion was stronger than its evidence. What is proven is narrower and more useful: the
+control plane (I²C) works end to end and the data plane (the CSI-2 differential pairs) carries
+nothing. Those share one ribbon cable but different conductors, and the high-speed pairs are
+far more sensitive to a partially-seated or flexed connector — a real risk here, since the
+camera rides a pan/tilt head that flexes the cable in service. Replacement order is therefore
+**cable, then camera module, then board**, cheapest and likeliest first. The test-pattern
+result narrows it to the sensor's MIPI transmitter, the cable, or the RP1 receiver, and cannot
+distinguish between those three from software.
+
+Two software avenues remain untested. Both need a reboot of a headless robot, which must not be
+done with the servo rail energised, so neither was taken unilaterally. Given the test-pattern
+result the expected value of both is low; they are recorded as options, not a plan, and are the
+*only* software steps left worth taking.
+
+1. **Kernel regression test.** 6.17.0-1003-raspi is still installed, and
+   `/boot/firmware/old/vmlinuz.bak-1003` was confirmed by string inspection to be that kernel.
+   Ubuntu's `rp1-cfe` is a non-standard backport that does emit a kernel WARNING (below), so a
+   regression in 6.17.0-1021 is not absurd. `flash-kernel` makes the switch reversible:
+   `sudo flash-kernel --force 6.17.0-1003-raspi`, reboot, test, and revert with
+   `sudo flash-kernel --force 6.17.0-1021-raspi`.
+2. **Overlay link parameters.** The `imx708` overlay accepts `link-frequency` of 450000000
+   (default), 447000000 or 453000000, plus `media-controller=off` and `vcm=off`. These exist
+   for interference mitigation and would be set with `camera_auto_detect=0` and an explicit
+   `dtoverlay=imx708,link-frequency=<hz>`. A 0.7% frequency shift plausibly rescues a
+   marginal link; it does not explain a link delivering nothing at all.
+
+Also eliminated: the driver's `track_csi2_errors=1` module parameter was enabled and a capture
+run under it reported **no CSI-2 errors of any kind** — confirming silence rather than
+corruption. The only other module parameters are `imx708`'s `qbc_adjust` (Bayer line
+correction, cosmetic) and a debug flag; none affect lane count or timing. `apt` offers no newer
+kernel, libcamera, rpicam or raspi-firmware package, so there is no update to apply.
+
+**Noted in passing:** Ubuntu ships two CFE drivers — `rp1-cfe-downstream.ko` (bound here, via
+DT compatible `raspberrypi,rp1-cfe`) and the upstream `rp1-cfe.ko` (compatible
+`raspberrypi,rp1-cfe-upstream`). Switching would need a DT overlay, and upstream's multi-stream
+handling is less complete, so it is not a fix. The downstream driver does emit a kernel WARNING
+at `v4l2-subdev.c:462` in `call_s_stream` on the stop path when a capture is killed; that is
+stream-state bookkeeping noise on teardown, not the cause.
 
 ---
 
