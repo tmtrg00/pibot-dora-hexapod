@@ -7,6 +7,54 @@ revert an old entry.
 
 ---
 
+## 2026-08-17 — Vendor libcamera and the vendor CFE driver both built and installed, and the camera still fails: userspace and the CFE driver are eliminated
+
+Followed a guide suggesting the Raspberry Pi forks be built from source rather than using the
+distro packages, on the hypothesis that Ubuntu's **upstream** libcamera never fully commands the
+sensor into streaming. That hypothesis was wrong, but testing it eliminated two large suspects.
+
+**Confirmed first that Ubuntu ships upstream libcamera, not the Pi fork** — `libcamera0.7
+0.7.0-1ubuntu2`, `Homepage: https://libcamera.org/`, maintained by Ubuntu Developers. Raspberry
+Pi OS ships `github.com/raspberrypi/libcamera`. The IPA tuning data is present either way (62
+JSONs under `/usr/share/libcamera/ipa/rpi/pisp`), so only handler code differed.
+
+- **Built and installed the vendor libcamera 0.7.2** from `raspberrypi/libcamera` with
+  `-Dpipelines=rpi/vc4,rpi/pisp -Dipas=rpi/vc4,rpi/pisp`, into `/usr/local` so the distro
+  packages in `/usr/lib` stay intact. 273/273 objects, no errors. `ldconfig` prefers it and
+  `ldd $(which rpicam-still)` confirms it loads from `/usr/local`. **Capture still times out.**
+  The vendor library is verifiably the one running — the error moved from
+  `pipeline_base.cpp:1357` to `:1372`.
+- **Built and loaded the vendor CFE kernel driver** from `raspberrypi/linux` branch `rpi-7.0.y`,
+  which matches this kernel's version exactly. It compiles cleanly out-of-tree against the
+  installed 7.0.0-1016 headers, loads, binds both CSI devices, and registers the underscore node
+  names libcamera expects. **Capture still times out.**
+
+Worth recording: the vendor tree ships both `rp1_cfe` and `rp1-cfe` directories, the same pair
+Ubuntu packages, and the vendor Makefile produces the identically-named
+`rp1-cfe-downstream.ko`. But the `srcversion` values differ — `DD16F0DB007FD8A39FEEDF7` for the
+vendor build against `15A9735CA80BF1C997A8620` for Ubuntu's — so Ubuntu is not shipping the
+vendor source unmodified. That difference did not turn out to matter, since the pure vendor
+build fails identically.
+
+**Correction to a claim relied on all day.** The "zero packets and zero discards" reading came
+from `CSI2_CH_DEBUG(n)` and `CSI2_CH_FE_FRAME_ID(n)`, which belong to the direct
+`csi2 → csi2_chN` capture channels. libcamera routes `csi2 → pisp-fe` instead, so those
+registers may legitimately read zero on a *working* system and may never have been measuring
+what they were taken to measure. They were treated as decisive evidence of an absent MIPI
+signal, and that interpretation is not safe. The observation that no frames arrive stands; the
+inference about *where* the data stops does not.
+
+**Decision: stop attributing this to any single replaceable component.** With vendor libcamera
+and the vendor CFE driver both in place and the failure unchanged, the difference from a working
+Raspberry Pi OS install lies in the rest of the Ubuntu kernel — the RP1 platform, clock, IOMMU
+and regulator code around the CFE — or in firmware. None of that is swappable piecemeal. The
+practical route to a working camera is Raspberry Pi OS.
+
+The vendor libcamera remains installed in `/usr/local` and takes precedence over the distro
+package. It is harmless and easily removed, but it means `rpicam-*` now runs vendor code.
+
+---
+
 ## 2026-08-17 — Forcing the upstream RP1 CFE driver is a dead end; the fault is in Ubuntu's downstream driver or its DTB
 
 Tried to route around the Ubuntu camera fault by swapping the kernel's two CFE drivers. Both

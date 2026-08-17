@@ -31,15 +31,20 @@ tells you something.
     297/450 MHz link frequencies), power rails enabling during capture (`cam0_reg` use 0→1),
     link rates programmed (437/900 Mbps), and a fully linked media pipeline with matching
     formats. The bug is below all of that.
-  - Lead worth pursuing: the kernel ships two CFE drivers — `rp1-cfe-downstream.ko` (loaded,
-    binds `raspberrypi,rp1-cfe`) and `rp1-cfe.ko` (unused, binds `raspberrypi,rp1-cfe-upstream`).
-    Only a downstream DTB exists, so selecting the other needs a device tree this system does not
-    ship.
-  - **Decide the direction (blocks everything vision-related):** either move the robot to
-    Raspberry Pi OS, which is proven working here and is what `picamera2` is developed against,
-    or stay on Ubuntu 26.04 with no camera pending an upstream fix. A cheap intermediate
-    experiment is to copy the vendor DTB and overlays off the working Raspberry Pi OS card and
-    boot them via the **tryboot** slot, which falls back automatically if the Pi fails to boot.
+  - Eliminated so far, each by direct test rather than argument (CHANGELOG 2026-08-17): the
+    upstream CFE driver; **vendor libcamera 0.7.2 built from source** and installed to
+    `/usr/local`; **the vendor CFE driver built from `raspberrypi/linux` `rpi-7.0.y`**, matching
+    this kernel exactly. Also verified the device tree matches vendor sources property for
+    property, including the `iommus` assignment. None of it changes the failure.
+  - Do **not** re-run these: the DTB comparison, the driver override, the vendor libcamera build,
+    or the vendor CFE driver build. All are recorded as negative results.
+  - Treat the "zero packets" register evidence with suspicion — `CSI2_CH_DEBUG` and
+    `CSI2_CH_FE_FRAME_ID` cover the direct `csi2 → csi2_chN` channels, but libcamera uses
+    `csi2 → pisp-fe`, so they may read zero even on a working system.
+  - **Decide the direction (blocks everything vision-related):** move the robot to Raspberry Pi
+    OS, which is proven working on this board and is what `picamera2` is developed against, or
+    stay on Ubuntu 26.04 with no camera. The remaining difference is the rest of the Ubuntu
+    kernel — RP1 platform, clock, IOMMU and regulator code — which cannot be swapped piecemeal.
   - The node needs no change either way.
   - Blocks: vision-guided obstacle avoidance, the autonomous observation loop, and the
     responsiveness comparison that MASTERPLAN makes the definition of success.
