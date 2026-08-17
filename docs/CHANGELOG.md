@@ -7,6 +7,41 @@ revert an old entry.
 
 ---
 
+## 2026-08-17 — Two different sensors on both CSI ports both time out, ruling out sensor and cable
+
+Tested a second camera fitted alongside the IMX708: an OV5647 on CAM0 (`i2c@88000`, CFE
+`/dev/media0`, capture node `/dev/video4`) and the existing IMX708 on CAM1 (`i2c@80000`, CFE
+`/dev/media1`, capture node `/dev/video12`). Both enumerate correctly in
+`rpicam-hello --list-cameras` with their full mode lists, and libcamera opens, configures and
+starts each one and selects a sensor format without complaint — `1296x972-SGBRG10_1X10` for the
+OV5647 and `2304x1296-SBGGR10_1X10` for the IMX708. Neither ever delivers a buffer. Both fail
+identically one second in with `Dequeue timer of 1000000.00us has expired!` followed by
+`Camera frontend has timed out!`, and no JPEG is written. Reproduced through `rpicam-still` and
+again through `picamera2` on the project's own venv, where `capture_file()` does not merely
+fail but blocks past a 40s deadline and had to be killed. No orphaned processes were left
+behind afterwards.
+
+**Fix:** none — this is a diagnosis, not a repair. Nothing in the tree changed.
+
+The value of the result is what it eliminates. The previous conclusion rested on a single
+sensor on a single port, which left a bad IMX708, a bad ribbon cable and a bad port all
+equally consistent with the evidence. Two different sensor models, on two different ports,
+through two independent CFE instances, failing at the same point in the same way, rules out
+all three: a defect that follows neither the sensor nor the cable nor the port is in what they
+share, which is the RP1 CSI-2 receive path.
+
+**Decision:** the pinned PENDING item stays pinned but its wording is narrowed from "the board
+needs replacing" to naming the shared receive path, because this evidence cannot separate the
+RP1 silicon from the Ubuntu 25.10 kernel and libcamera stack driving it — `6.17.0-1021-raspi`
+with `libcamera 0.5.0-1ubuntu4` and `rpicam-apps 1.7.0-1ubuntu3`, which is not the Raspberry Pi
+OS combination this hardware is normally validated against. A common-mode software fault would
+present exactly as observed. Booting Raspberry Pi OS from a spare card and attempting one
+capture is a cheap test that discriminates the two and should be run before any board is
+bought; it is recorded in PENDING. This supersedes nothing in the 2026-08-16 entry — the
+symptom and the "not fixable in this project" conclusion are unchanged.
+
+---
+
 ## 2026-08-16 — Forked to a fully standalone project with its own documentation structure
 
 Copied `src/`, `config/`, `test/`, `point.txt`, `params.json` and `requirements.txt` out of

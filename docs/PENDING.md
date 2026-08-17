@@ -19,14 +19,19 @@ tells you something.
   - Blocks: a complete 360° turn (needs ~47 gait cycles, roughly double what has been run),
     the full stance cycle without aborting, and any walking test.
 
-- [PINNED 2026-08-16] **Camera produces no frames — the Pi 5 RP1 CSI-2 receive path is
-  defective; the board needs replacing.** Inherited from the upstream project, confirmed
-  independently here: the IMX708 enumerates and libcamera opens, configures and starts it, then
-  every capture times out with `Camera frontend has timed out`. Not a software problem and not
-  fixable here.
-  - Check state: `libcamera-hello --list-cameras` enumerates the sensor; `./run.sh camera`
+- [PINNED 2026-08-16] **Camera produces no frames — the fault is in the Pi 5 RP1 CSI-2 receive
+  path, not in any sensor or cable.** Sensors enumerate and libcamera opens, configures and
+  starts them, then every capture times out with `Camera frontend has timed out`. Not fixable
+  in this project. An OV5647 on CAM0 and the IMX708 on CAM1 fail identically (CHANGELOG
+  2026-08-17), which eliminates the sensor, the ribbon and the individual port.
+  - Check state: `rpicam-hello --list-cameras` enumerates both sensors; `./run.sh camera`
     fails all three attempts in 8s each and disables the camera.
-  - The node needs no change when a working board arrives.
+  - **Next test, do this before buying a board:** boot Raspberry Pi OS from a spare SD card and
+    attempt one `rpicam-still` capture. The evidence so far cannot separate defective RP1
+    silicon from the Ubuntu 25.10 camera stack (`6.17.0-1021-raspi`, `libcamera 0.5.0-1ubuntu4`,
+    `rpicam-apps 1.7.0-1ubuntu3`), and a common-mode software fault would look exactly like
+    this. If Raspberry Pi OS captures, the board is fine and the fault is the distro's stack.
+  - The node needs no change either way.
   - Blocks: vision-guided obstacle avoidance, the autonomous observation loop, and the
     responsiveness comparison that MASTERPLAN makes the definition of success.
 
