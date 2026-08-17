@@ -7,6 +7,40 @@ revert an old entry.
 
 ---
 
+## 2026-08-17 — Forcing the upstream RP1 CFE driver is a dead end; the fault is in Ubuntu's downstream driver or its DTB
+
+Tried to route around the Ubuntu camera fault by swapping the kernel's two CFE drivers. Both
+register a platform driver named `rp1-cfe`, so they cannot co-load; the downstream one was
+unbound and removed, `rp1_cfe` (upstream) loaded, and the devices force-bound with
+`driver_override` since the DTB carries the downstream compatible string.
+
+**It probed cleanly** — all sixteen video nodes registered across both blocks, and both sensors
+re-attached (`ov5647 10-0036` on `/dev/media2`, `imx708` on `/dev/media3`). So the upstream
+driver is functional against this device tree. It is nonetheless unusable here, for two
+independent reasons:
+
+- **libcamera cannot see it.** `rpicam-still` reports `no cameras available`. The upstream driver
+  names its entities `rp1-cfe-csi2-ch0` where the downstream one uses `rp1-cfe-csi2_ch0`, and
+  Ubuntu's libcamera 0.7.0 pipeline handler matches the downstream topology.
+- **Raw V4L2 capture cannot start either.** With formats matched end to end
+  (`SGBRG10_1X10/1296x972` on sensor pad0, `csi2` pad0 and pad1) and the link enabled,
+  `VIDIOC_STREAMON` returns `EPIPE` and the kernel logs `Failed to start media pipeline: -32`.
+  The entity reports `0 routes` and `media-ctl --set-routing` returns `EOPNOTSUPP`, so the
+  multiplexed-stream setup this driver expects cannot be configured with the shipped tooling.
+
+**Decision: stop trying to fix this from configuration.** The remaining difference between the
+working Raspberry Pi OS install and the broken Ubuntu one is Ubuntu's backport of the downstream
+CFE driver, or the DTB it is paired with. Neither is reachable from `config.txt`, a module
+parameter or a driver override. The next diagnostic step that would actually discriminate is a
+side-by-side of the `csi@110000` node and stack versions taken from the working Raspberry Pi OS
+card; the next *fix* is either the vendor DTB booted through the tryboot slot, or moving the
+robot to Raspberry Pi OS.
+
+The system is left with the upstream driver bound; a reboot restores the shipped downstream
+driver, since nothing was made persistent.
+
+---
+
 ## 2026-08-17 — The camera works on Raspberry Pi OS: the board is fine, the RMA conclusion was wrong, and the fault is in Ubuntu's camera stack
 
 The owner booted Raspberry Pi OS on this Pi and the camera captured. **This supersedes every
