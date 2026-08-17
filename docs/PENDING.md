@@ -35,14 +35,15 @@ tells you something.
     which contradicts the upstream record that it "has never delivered a frame on this robot".
     Establish whether that memory is of a different Pi or a bench test before assembly. If a
     frame ever arrived on *this* board, the RMA reasoning needs revisiting.
-  - **[IN-FLIGHT 2026-08-17] Retest on the 26.04 stack — this is the immediate next action.**
-    The Pi was upgraded to Ubuntu 26.04 LTS (CHANGELOG 2026-08-17) but has **not been rebooted**,
-    so it still runs the old 6.17.0-1021 kernel. After the double reboot completes, rerun
-    `rpicam-still` on both cameras and re-read the CSI counters, and compare against the
-    all-zeros baseline. Verify `uname -r` reports 7.0.0-1016-raspi first — otherwise the test
-    proves nothing.
-  - **Then the last test:** boot Raspberry Pi OS from a spare SD card and attempt one
-    `rpicam-still`. This is now for warranty evidence rather than diagnosis.
+  - Software is now fully eliminated (CHANGELOG 2026-08-17): the failure is byte-identical on
+    Ubuntu 26.04 with kernel 7.0.0-1016 and libcamera 0.7.0, counters still all zero. Combined
+    with three ribbons, two sensors, both ports and a reseat, every variable changeable without
+    buying hardware has been changed.
+  - **Next action is the RMA.** A Raspberry Pi OS boot from a spare SD card remains available as
+    warranty paperwork if the vendor asks for it; it is no longer diagnosis.
+  - **Resolve first if possible:** the owner recalls the camera working previously, which no
+    record supports — upstream states it has never delivered a frame on this robot. If that
+    memory is of *this* board, something physical changed and the RMA reasoning needs revisiting.
   - The node needs no change either way.
   - Blocks: vision-guided obstacle avoidance, the autonomous observation loop, and the
     responsiveness comparison that MASTERPLAN makes the definition of success.

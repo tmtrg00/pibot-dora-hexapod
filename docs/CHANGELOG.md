@@ -7,6 +7,45 @@ revert an old entry.
 
 ---
 
+## 2026-08-17 — Camera fails identically on Ubuntu 26.04 with kernel 7.0 and libcamera 0.7, closing the software question for good
+
+Rebooted onto the upgraded stack and reran the camera tests. The result is the predicted one,
+and the prediction being right is worth less than the measurement now existing.
+
+Verified the test was actually valid before trusting it: `uname -r` reports
+**7.0.0-1016-raspi**, the tryboot promotion completed (`current/state` = `good`, `new/` rotated
+into `old/`, both `piboot-try` units inactive having done their work), and the release is
+26.04 LTS. This is the check that matters, because a promotion failure would have left the old
+kernel running and produced a meaningless "retest".
+
+Both sensors still enumerate perfectly on libcamera 0.7.0 / rpicam-apps 1.11.1, with full mode
+lists — the OV5647 on CAM0 now reporting 640x480 at 62.50 fps where 0.5.0 said 58.92, so the
+new stack is demonstrably doing its own thing and not a cached repeat. Then both fail exactly
+as before: `Dequeue timer of 1000000.00us has expired!`, `Camera frontend has timed out!`, no
+JPEG, on `/dev/video4` and `/dev/video12` respectively.
+
+The register counters are unchanged from the 6.17 baseline — every `CSI2_DISCARDS_*`,
+`CSI2_CH_DEBUG(n)` and `CSI2_CH_FE_FRAME_ID(n)` reads `0x00000000` on both CSI blocks with
+both cameras armed. Zero packets and zero discards, again.
+
+**Decision: the software stack is eliminated, and the RMA is the remaining action.** What has
+now been crossed is a full kernel major version (6.17 → 7.0), a libcamera minor (0.5 → 0.7),
+rpicam-apps 1.7 → 1.11 and a distro release, on top of upstream's earlier elimination of three
+ribbons, two sensor models, both CSI ports, a checklist reseat and a kernel A/B. Every variable
+that can be changed without buying hardware has been changed. The fault does not move.
+
+This also supersedes the caution recorded earlier today that the Ubuntu stack could be a
+common-mode cause — it was a fair hypothesis on the evidence available at the time and it has
+now been tested directly rather than argued away, which is why the upgrade was worth doing even
+though the outcome did not change. The remaining Raspberry Pi OS boot is warranty paperwork,
+not diagnosis, and is optional if the vendor does not ask for it.
+
+**Still open:** the owner's recollection that the camera once worked, which no record supports.
+It stays in PENDING because it is the only evidence pointing away from a hardware fault, and
+because if it refers to *this* board then something physical changed and that would matter.
+
+---
+
 ## 2026-08-17 — Upgraded the Pi to Ubuntu 26.04 LTS to eliminate the camera software stack, and found why the kernel had been frozen
 
 Upgraded 25.10 "questing" to 26.04 LTS "resolute" at the owner's explicit instruction, to rule
