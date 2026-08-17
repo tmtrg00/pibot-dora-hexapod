@@ -26,11 +26,17 @@ tells you something.
   2026-08-17), which eliminates the sensor, the ribbon and the individual port.
   - Check state: `rpicam-hello --list-cameras` enumerates both sensors; `./run.sh camera`
     fails all three attempts in 8s each and disables the camera.
-  - **Next test, do this before buying a board:** boot Raspberry Pi OS from a spare SD card and
-    attempt one `rpicam-still` capture. The evidence so far cannot separate defective RP1
-    silicon from the Ubuntu 25.10 camera stack (`6.17.0-1021-raspi`, `libcamera 0.5.0-1ubuntu4`,
-    `rpicam-apps 1.7.0-1ubuntu3`), and a common-mode software fault would look exactly like
-    this. If Raspberry Pi OS captures, the board is fine and the fault is the distro's stack.
+  - Confirmed at register level on this board (CHANGELOG 2026-08-17): every RP1 CSI-2 counter
+    reads zero on both CSI blocks with both cameras armed — zero packets *and* zero discards,
+    so nothing electrical reaches the data lanes. A kernel regression is eliminated by upstream's
+    direct A/B across 6.17.0-1003 and 6.17.0-1021 (failure byte-identical), and three ribbons,
+    two cameras, both ports and a checklist reseat were eliminated by swap.
+  - **Answer this before buying a board:** the owner recalls the camera working previously,
+    which contradicts the upstream record that it "has never delivered a frame on this robot".
+    Establish whether that memory is of a different Pi or a bench test before assembly. If a
+    frame ever arrived on *this* board, the RMA reasoning needs revisiting.
+  - **Then the last test:** boot Raspberry Pi OS from a spare SD card and attempt one
+    `rpicam-still`. This is now for warranty evidence rather than diagnosis.
   - The node needs no change either way.
   - Blocks: vision-guided obstacle avoidance, the autonomous observation loop, and the
     responsiveness comparison that MASTERPLAN makes the definition of success.

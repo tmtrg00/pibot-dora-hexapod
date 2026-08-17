@@ -7,6 +7,41 @@ revert an old entry.
 
 ---
 
+## 2026-08-17 — Register-level check confirms zero MIPI packets on both CSI blocks, retiring the software hypothesis
+
+Followed up the dual-port test by reading the RP1 CSI-2 receiver counters directly, with a
+capture armed, for both cameras against both CSI blocks
+(`/sys/kernel/debug/rp1-cfe:1f00110000.csi/csi2_regs` and `…:1f00128000.csi/…`). Every counter
+reads `0x00000000` in all four combinations: `CSI2_DISCARDS_OVERFLOW`, `_INACTIVE`,
+`_UNMATCHED` and `_LEN_LIMIT`, plus `CSI2_CH_DEBUG(0..3)` and `CSI2_CH_FE_FRAME_ID(0..3)`.
+Nothing arrives on the high-speed data lanes at all, while I2C over the same ribbon works
+perfectly — both sensors enumerate with complete mode lists.
+
+Zero *discards* alongside zero packets is the informative part. A skewed or partially seated
+ribbon that mates some data-lane contacts intermittently produces corruption, and the discard
+counters exist precisely to record it; they would climb. Reading zero across every counter
+means no electrical activity whatsoever on the lanes, not degraded activity.
+
+**Decision:** this supersedes the "cannot separate defective silicon from the Ubuntu 25.10
+camera stack" line in the entry below, written earlier the same day before the upstream record
+was consulted. The upstream project ran the discriminating test already
+(`/opt/pibot-hexapod/docs/CHANGELOG.md`, 2026-08-16): the Pi was found booting a frozen
+6.17.0-1003 kernel snapshot, was upgraded to 6.17.0-1021 along with DTBs, overlays, bootloader
+EEPROM and linux-firmware, and **the camera failure was byte-identical before and after**. A
+kernel-version regression is therefore eliminated by direct A/B on this hardware, not by
+argument. Both kernels remain installed here (`/boot/vmlinuz-6.17.0-1003-raspi` and `-1021`),
+so the test is repeatable if ever doubted. Upstream also eliminated three ribbons, two cameras,
+both ports and a checklist reseat by direct swap.
+
+**Open question, and the only evidence pointing the other way:** the owner recalls the camera
+working at some point in the past, which the upstream record contradicts outright — it states
+the camera "has never delivered a frame on this robot". Worth pinning down whether the memory
+is of a different Pi or a pre-assembly bench test, because if a frame ever arrived on *this*
+board then something physical changed and the RMA reasoning needs revisiting. Tracked in
+PENDING.
+
+---
+
 ## 2026-08-17 — Two different sensors on both CSI ports both time out, ruling out sensor and cable
 
 Tested a second camera fitted alongside the IMX708: an OV5647 on CAM0 (`i2c@88000`, CFE
