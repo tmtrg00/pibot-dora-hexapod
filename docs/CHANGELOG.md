@@ -21,7 +21,11 @@ independent reasons:
 
 - **libcamera cannot see it.** `rpicam-still` reports `no cameras available`. The upstream driver
   names its entities `rp1-cfe-csi2-ch0` where the downstream one uses `rp1-cfe-csi2_ch0`, and
-  Ubuntu's libcamera 0.7.0 pipeline handler matches the downstream topology.
+  Ubuntu's libcamera 0.7.0 pipeline handler matches the downstream topology. Forcing the generic
+  handler with `LIBCAMERA_PIPELINES_MATCH_LIST=simple` does not help either — it also finds no
+  cameras, since it expects a direct sensor-to-video-node path and cannot drive the PiSP front
+  end. The only Raspberry Pi handlers built into this libcamera are `rpi/pisp` and `rpi/vc4`,
+  both of which target the downstream topology, so the two halves cannot be mixed.
 - **Raw V4L2 capture cannot start either.** With formats matched end to end
   (`SGBRG10_1X10/1296x972` on sensor pad0, `csi2` pad0 and pad1) and the link enabled,
   `VIDIOC_STREAMON` returns `EPIPE` and the kernel logs `Failed to start media pipeline: -32`.
