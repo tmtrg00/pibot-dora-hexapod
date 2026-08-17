@@ -19,31 +19,27 @@ tells you something.
   - Blocks: a complete 360° turn (needs ~47 gait cycles, roughly double what has been run),
     the full stance cycle without aborting, and any walking test.
 
-- [PINNED 2026-08-16] **Camera produces no frames — the fault is in the Pi 5 RP1 CSI-2 receive
-  path, not in any sensor or cable.** Sensors enumerate and libcamera opens, configures and
-  starts them, then every capture times out with `Camera frontend has timed out`. Not fixable
-  in this project. An OV5647 on CAM0 and the IMX708 on CAM1 fail identically (CHANGELOG
-  2026-08-17), which eliminates the sensor, the ribbon and the individual port.
-  - Check state: `rpicam-hello --list-cameras` enumerates both sensors; `./run.sh camera`
-    fails all three attempts in 8s each and disables the camera.
-  - Confirmed at register level on this board (CHANGELOG 2026-08-17): every RP1 CSI-2 counter
-    reads zero on both CSI blocks with both cameras armed — zero packets *and* zero discards,
-    so nothing electrical reaches the data lanes. A kernel regression is eliminated by upstream's
-    direct A/B across 6.17.0-1003 and 6.17.0-1021 (failure byte-identical), and three ribbons,
-    two cameras, both ports and a checklist reseat were eliminated by swap.
-  - **Answer this before buying a board:** the owner recalls the camera working previously,
-    which contradicts the upstream record that it "has never delivered a frame on this robot".
-    Establish whether that memory is of a different Pi or a bench test before assembly. If a
-    frame ever arrived on *this* board, the RMA reasoning needs revisiting.
-  - Software is now fully eliminated (CHANGELOG 2026-08-17): the failure is byte-identical on
-    Ubuntu 26.04 with kernel 7.0.0-1016 and libcamera 0.7.0, counters still all zero. Combined
-    with three ribbons, two sensors, both ports and a reseat, every variable changeable without
-    buying hardware has been changed.
-  - **Next action is the RMA.** A Raspberry Pi OS boot from a spare SD card remains available as
-    warranty paperwork if the vendor asks for it; it is no longer diagnosis.
-  - **Resolve first if possible:** the owner recalls the camera working previously, which no
-    record supports — upstream states it has never delivered a frame on this robot. If that
-    memory is of *this* board, something physical changed and the RMA reasoning needs revisiting.
+- [PINNED 2026-08-17] **Camera produces no frames on Ubuntu, but works on Raspberry Pi OS on this
+  same board. The hardware is fine — do NOT RMA the Pi.** This replaces the previous entry, which
+  said the RP1 receiver was defective; see CHANGELOG 2026-08-17 for why that was wrong. The
+  owner's recollection that the camera once worked was correct and is no longer an open question.
+  - Check state: `rpicam-hello --list-cameras` enumerates both sensors; captures fail with
+    `Camera frontend has timed out` and every CSI-2 counter reads zero.
+  - Fails on both Ubuntu kernels (6.17.0-1021 and 7.0.0-1016), works on Raspberry Pi OS, so it is
+    Ubuntu-specific packaging, not a kernel-version regression.
+  - Everything checkable on the Ubuntu side looks correct: sensor endpoints (`data-lanes <1 2>`,
+    297/450 MHz link frequencies), power rails enabling during capture (`cam0_reg` use 0→1),
+    link rates programmed (437/900 Mbps), and a fully linked media pipeline with matching
+    formats. The bug is below all of that.
+  - Lead worth pursuing: the kernel ships two CFE drivers — `rp1-cfe-downstream.ko` (loaded,
+    binds `raspberrypi,rp1-cfe`) and `rp1-cfe.ko` (unused, binds `raspberrypi,rp1-cfe-upstream`).
+    Only a downstream DTB exists, so selecting the other needs a device tree this system does not
+    ship.
+  - **Decide the direction (blocks everything vision-related):** either move the robot to
+    Raspberry Pi OS, which is proven working here and is what `picamera2` is developed against,
+    or stay on Ubuntu 26.04 with no camera pending an upstream fix. A cheap intermediate
+    experiment is to copy the vendor DTB and overlays off the working Raspberry Pi OS card and
+    boot them via the **tryboot** slot, which falls back automatically if the Pi fails to boot.
   - The node needs no change either way.
   - Blocks: vision-guided obstacle avoidance, the autonomous observation loop, and the
     responsiveness comparison that MASTERPLAN makes the definition of success.

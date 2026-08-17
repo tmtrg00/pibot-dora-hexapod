@@ -7,6 +7,58 @@ revert an old entry.
 
 ---
 
+## 2026-08-17 — The camera works on Raspberry Pi OS: the board is fine, the RMA conclusion was wrong, and the fault is in Ubuntu's camera stack
+
+The owner booted Raspberry Pi OS on this Pi and the camera captured. **This supersedes every
+conclusion reached earlier today and on 2026-08-16 that the RP1 CSI-2 receiver is defective and
+the board needs replacing. Do not RMA the Pi.** The hardware is good — sensors, ribbons, ports
+and receiver alike.
+
+**The reasoning error, stated plainly so it is not repeated.** The whole hardware case rested on
+the CSI-2 counters reading zero packets *and* zero discards, argued as "a marginal connection
+corrupts and increments discards, so silence means the receiver is dead." The premise is sound;
+the conclusion does not follow. Zero counters prove only that **no data arrived**. That is
+equally consistent with the receiver never being armed, or the sensor never being commanded onto
+the high-speed lanes — a transmitter that never transmits and a receiver that cannot receive
+produce identical register state. Upstream's OV5647 `0x0100` read-back (one register, one
+sensor) was treated as closing that gap and does not. The counters were the strongest-looking
+evidence in the investigation and they were load-bearing for a claim they could not support.
+
+Diagnosis so far on the Ubuntu side, all of which looks *correct*, which is what makes this
+awkward:
+
+- **Sensor endpoints are right.** `data-lanes = <1 2>`, `clock-lanes = <0>`,
+  `clock-noncontinuous`, `link-frequencies` 297 MHz (OV5647) and 450 MHz (IMX708).
+- **Power sequencing works.** Sampled during an active capture, not at idle: `cam0_reg` goes
+  `use 0 → 1` with `10-0036-avdd` enabled, and `cam1_reg` `1 → 2` with `11-001a-vana1` enabled.
+  The analog rails do come up. An earlier idle sample showing `use 0` was misleading and nearly
+  became a false lead.
+- **Link rates are programmed correctly** — `dmesg` reports "Using a link rate of 437 Mbps" on
+  `1f00110000.csi` and "900 Mbps" on `1f00128000.csi`.
+- **The media pipeline is fully linked with matching formats** end to end:
+  sensor → `csi2` → `pisp-fe` `[ENABLED]` → `rp1-cfe-fe_image0` `[ENABLED]`.
+- **CSI node register maps are internally consistent** between both blocks (`+0x0000`, `+0x4000`,
+  `+0x10000`, `+0x14000` from each base).
+
+One structural finding worth keeping: this kernel ships **two** CFE drivers —
+`rp1_cfe/rp1-cfe-downstream.ko` (loaded, binds `raspberrypi,rp1-cfe`) and
+`rp1-cfe/rp1-cfe.ko` (never loaded, binds `raspberrypi,rp1-cfe-upstream`). Only a downstream
+DTB is shipped, so selecting the other driver is not a configuration change — it needs a device
+tree that does not exist on this system.
+
+The failure occurs on **both** Ubuntu kernels (6.17.0-1021 and 7.0.0-1016) and not on Raspberry
+Pi OS, so it is Ubuntu-specific rather than a kernel-version regression. The 26.04 upgrade was
+therefore not wasted — it eliminated kernel version as the variable and sharpened the fault to
+Ubuntu's packaging of the camera stack — but the "software is eliminated" conclusion it was
+used to justify was wrong, and wrong in the direction of the more expensive decision.
+
+**Decision:** the RMA is cancelled. The remaining choice is between running the robot on
+Raspberry Pi OS, which is proven working on this hardware and is what `picamera2` is developed
+against, and staying on Ubuntu 26.04 with a non-functional camera pending an upstream fix.
+Tracked in PENDING; not decided here because it is a project-direction call.
+
+---
+
 ## 2026-08-17 — Camera still dead with the Pi detached from the robot, eliminating the robot's power and wiring
 
 Retested both cameras with the Pi unplugged from the robot entirely — no servo rail, no PCA9685
