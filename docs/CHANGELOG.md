@@ -7,6 +7,41 @@ revert an old entry.
 
 ---
 
+## 2026-08-17 — Removing the IOMMU from the CSI nodes changes nothing either; every reachable variable on Ubuntu is now exhausted
+
+Tested the last configuration-level difference available: the `iommus` property on the CSI
+nodes. The theory was that the receiver might be working correctly while DMA wrote frames to
+unmapped IOVAs, which would produce exactly the dequeue timeout observed and would also explain
+why replacing libcamera and the CFE driver changed nothing.
+
+A `/delete-property/` overlay does not work for this — `dtc` compiles it to an empty
+`__overlay__`, so the property survives. The DTB was therefore edited directly: decompiled,
+the two `iommus = <0x40>` lines belonging to `csi@110000` and `csi@128000` removed by line
+number after mapping every occurrence to its enclosing node, and recompiled. The seven other
+`iommus` properties (DSI, VEC, DPI, codec, `pisp_be`, HVS) were left untouched; the resulting
+blob was 78623 bytes against 78655, a 32-byte delta consistent with two properties and nothing
+else.
+
+Verified applied after reboot: `iommus` absent from both CSI nodes in `/proc/device-tree`, zero
+`csi.*iommu` lines in `dmesg` where there were previously several, and both sensors still
+enumerating. **Capture fails identically.** The stock DTB was restored from
+`bcm2712-rpi-5-b.dtb.bak-iommu` and verified byte-identical; it takes effect on the next reboot.
+
+**Decision: stop debugging the camera on Ubuntu.** The complete list of things eliminated by
+direct test, on this board, is now: three ribbon cables, two sensor models, both CSI ports in
+both orientations, a checklist reseat, the robot's entire electrical environment, a kernel A/B
+within 6.17, a kernel major version bump to 7.0, a full distro release upgrade, the upstream CFE
+driver, vendor libcamera 0.7.2 built from source, the vendor CFE driver built from the matching
+`rpi-7.0.y` branch, a device tree verified property-for-property against vendor sources, and now
+the CSI IOMMU binding. The camera works on Raspberry Pi OS on this same hardware.
+
+Whatever the difference is, it lies in the parts of the Ubuntu kernel that cannot be swapped
+piecemeal — the RP1 platform, clock and regulator code around the CFE — or in firmware. The
+route to a working camera is Raspberry Pi OS, and that is now a project-direction decision
+rather than a debugging one.
+
+---
+
 ## 2026-08-17 — Vendor libcamera and the vendor CFE driver both built and installed, and the camera still fails: userspace and the CFE driver are eliminated
 
 Followed a guide suggesting the Raspberry Pi forks be built from source rather than using the

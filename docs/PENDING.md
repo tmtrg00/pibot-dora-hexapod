@@ -37,7 +37,8 @@ tells you something.
     this kernel exactly. Also verified the device tree matches vendor sources property for
     property, including the `iommus` assignment. None of it changes the failure.
   - Do **not** re-run these: the DTB comparison, the driver override, the vendor libcamera build,
-    or the vendor CFE driver build. All are recorded as negative results.
+    the vendor CFE driver build, or removing the CSI `iommus` property. All are recorded as
+    negative results (CHANGELOG 2026-08-17).
   - Treat the "zero packets" register evidence with suspicion — `CSI2_CH_DEBUG` and
     `CSI2_CH_FE_FRAME_ID` cover the direct `csi2 → csi2_chN` channels, but libcamera uses
     `csi2 → pisp-fe`, so they may read zero even on a working system.
