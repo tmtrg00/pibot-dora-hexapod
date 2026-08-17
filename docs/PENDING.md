@@ -68,10 +68,6 @@ tells you something.
   `--system-site-packages`. Left unchanged for now because replacing it is a scope decision, not
   a side effect of the rebuild.
 
-- [TODO 2026-08-17] **Delete `/opt/pibot-dora/venv-python3.13-broken` and
-  `/opt/pibot-backup-preupgrade-2026-08-17` once the sensors graph passes.** Together they hold
-  the pre-upgrade venv, a 290 MB boot-partition tarball, `/etc`, the package selections and the
-  displaced `old/` boot slot. Kept deliberately until the new stack is proven on hardware.
 
 - [TODO 2026-08-16] **Copy `.env` into this project.** The fork carried `src/`, `config/` and
   the calibration but not the secrets, so `OPENAI_API_KEY` and `PICOVOICE_ACCESS_KEY` are

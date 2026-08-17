@@ -7,6 +7,33 @@ revert an old entry.
 
 ---
 
+## 2026-08-17 — Cleaned up the camera investigation: vendor libcamera removed, build trees and pre-upgrade backups deleted
+
+Reverted the system to stock after the investigation closed, freeing about 1 GB.
+
+`ninja uninstall` removed the vendor libcamera but reported six failures — the IPA modules are
+produced by a custom signing script it does not track, leaving
+`/usr/local/lib/aarch64-linux-gnu/libcamera/ipa/*.so.sign` and the Python bindings behind. Those
+were removed by hand. `/usr/local` is now free of libcamera artefacts and
+`ldd $(which rpicam-still)` resolves to the distro `libcamera0.7 0.7.0-1ubuntu2` again.
+
+Deleted: `~/camera-build` (96 MB of libcamera, rpicam-apps and vendor kernel source),
+`/opt/pibot-dora/venv-python3.13-broken` (408 MB), `/opt/pibot-backup-preupgrade-2026-08-17`
+(472 MB) and the now-redundant `bcm2712-rpi-5-b.dtb.bak-iommu` from the boot partition.
+
+**Kept deliberately:** the small text manifests from the pre-upgrade backup, moved to
+`/opt/pibot-preupgrade-manifests` (56 KB) — `venv-freeze.txt`, `dpkg-selections.txt` and the
+original `config.txt`, `cmdline.txt` and `autoboot.txt`. The bulk archives had little recovery
+value once 26.04 was running, but the sensors graph still has not been run against hardware, so
+the record of what was installed beforehand is worth its 56 KB until it has.
+
+Verified after cleanup, not merely assumed: all sixteen venv imports resolve under Python
+3.14.4, the project modules import, both boot slots read `good`, and both cameras still
+enumerate. The stock DTB is restored on disk and applies at the next reboot; the running kernel
+still has the IOMMU-stripped tree from the last test.
+
+---
+
 ## 2026-08-17 — Removing the IOMMU from the CSI nodes changes nothing either; every reachable variable on Ubuntu is now exhausted
 
 Tested the last configuration-level difference available: the `iommus` property on the CSI
