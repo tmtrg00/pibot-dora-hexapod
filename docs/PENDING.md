@@ -48,14 +48,28 @@ tells you something.
   - Blocks: vision-guided obstacle avoidance, the autonomous observation loop, and the
     responsiveness comparison that MASTERPLAN makes the definition of success.
 
-- [PINNED 2026-08-17] **The project venv is broken by the Python 3.13 → 3.14 upgrade and must be
-  rebuilt before any graph runs.** Site-packages is still `venv/lib/python3.13` while the
-  interpreter is 3.14.4, so `openai`, `dotenv` and `smbus2` fail to import; `yaml` and `numpy`
-  resolve only because of `--system-site-packages`. Rebuild from `requirements.txt` (the
-  `venv-freeze.txt` backup is polluted with system packages), keeping `--system-site-packages`
-  for `lgpio`, `libcamera` and `picamera2`. Expect the `scipy`, `opencv-python`, `numpy` and
-  `RPi.GPIO` pins to need attention on 3.14 — prefer the system packages where they exist.
-  Blocks every `./run.sh` graph.
+- [PINNED 2026-08-17] **The rebuilt venv has never touched hardware — run the sensors graph
+  before trusting it.** It is verified only at import level (CHANGELOG 2026-08-17): all 19
+  third-party and all 16 project modules load under Python 3.14.4, but no graph has run and no
+  device has responded. The robot electronics are unpowered — the I2C bus scans empty at every
+  address and `ADC().read_battery_voltage()` raises `OSError: [Errno 121]`. Power the
+  electronics, confirm `i2cdetect -y 1` shows 0x40, 0x41, 0x48 and 0x68, then `./run.sh sensors`.
+  Watch particularly for `rpi_ws281x` (SPI LEDs) and `lgpio` under the new kernel, neither of
+  which an import test can exercise.
+
+- [TODO 2026-08-17] **Rewrite `requirements.txt` to match what is actually installed.** It is now
+  actively misleading: a 90+ line inherited freeze pinning `anthropic`, `google-generativeai`,
+  `groq`, `ollama`, Adafruit CircuitPython and `luma.oled`, none of which the code imports and
+  none of which the rebuilt venv contains. The real set is `dora-rs` and `dora-rs-cli` at 0.5.0
+  plus `openai`, `python-dotenv`, `pvporcupine`, `smbus2`, `webrtcvad`, `rpi-ws281x`,
+  `audioop-lts` and `pydub`, with the rest coming from system packages via
+  `--system-site-packages`. Left unchanged for now because replacing it is a scope decision, not
+  a side effect of the rebuild.
+
+- [TODO 2026-08-17] **Delete `/opt/pibot-dora/venv-python3.13-broken` and
+  `/opt/pibot-backup-preupgrade-2026-08-17` once the sensors graph passes.** Together they hold
+  the pre-upgrade venv, a 290 MB boot-partition tarball, `/etc`, the package selections and the
+  displaced `old/` boot slot. Kept deliberately until the new stack is proven on hardware.
 
 - [TODO 2026-08-16] **Copy `.env` into this project.** The fork carried `src/`, `config/` and
   the calibration but not the secrets, so `OPENAI_API_KEY` and `PICOVOICE_ACCESS_KEY` are

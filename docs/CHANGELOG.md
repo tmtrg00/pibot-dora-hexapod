@@ -7,6 +7,47 @@ revert an old entry.
 
 ---
 
+## 2026-08-17 — Rebuilt the venv on Python 3.14, replacing the kitchen-sink requirements with the dependencies the code actually imports
+
+The 26.04 upgrade moved the interpreter to 3.14.4 while the venv's site-packages stayed at
+`lib/python3.13`, so every pip-installed package vanished. Rebuilt it. The old tree was
+**moved, not deleted**, to `/opt/pibot-dora/venv-python3.13-broken`.
+
+**Decision: install what the code imports, not what `requirements.txt` lists.** That file is an
+inherited kitchen-sink freeze of 90+ pins carrying `anthropic`, `google-generativeai`, `groq`,
+`ollama`, the Adafruit CircuitPython stack and `luma.oled` — none of which any module in
+`nodes/` or `src/` imports. Reinstalling it wholesale on 3.14 would have meant source builds of
+`scipy`, `opencv-python` and `RPi.GPIO` for packages the robot never loads. The actual import
+surface, taken from the source rather than the freeze, is 19 third-party modules, and over half
+are already provided by 26.04 system packages and reached through `--system-site-packages`:
+`numpy` 2.3.5, `yaml`, `pyaudio`, `spidev`, `PIL`, `cv2`, `lgpio`, `libcamera`, `picamera2`.
+
+Pip installed only the remainder. `dora-rs` and `dora-rs-cli` were pinned to **0.5.0** because
+the node API is version-coupled; everything else was left unpinned so pip could pick builds
+that exist for 3.14 rather than forcing pins produced for 3.13. `dora_rs` ships a `cp37-abi3`
+wheel and installed unchanged. Nothing needed compiling — `webrtcvad` and `rpi_ws281x` both
+resolved to wheels — and no build errors occurred.
+
+Versions that moved as a result, worth knowing before debugging anything: **openai 2.15.0 →
+3.1.0** (a major bump), `pvporcupine` 4.0.1 → 4.0.3, `python-dotenv` 1.2.1 → 1.2.3, `smbus2`
+0.6.0 → 0.6.1, `numpy` 2.2.6 → 2.3.5 (now the system package). The openai major was checked
+rather than assumed: the project only touches `OpenAI(api_key=...)`,
+`client.chat.completions.create`, `audio.transcriptions.create` and `audio.speech.create`, and
+all four are present and unchanged in 3.x.
+
+**Verified:** all 19 third-party imports resolve, and all 16 project modules
+(`src.control`, `src.actions`, `src.camera`, `src.voice`, `src.llm_handler`, `nodes.common`,
+`nodes.stances` and the rest) import cleanly under 3.14.4.
+
+**Not verified, and deliberately not claimed:** nothing was exercised against live hardware. The
+I2C bus scans completely empty — no device at 0x40, 0x41, 0x48 or 0x68 — because the robot
+electronics are unpowered. The bus itself is healthy (`/dev/i2c-1` present, `i2c_brcmstb`
+loaded), so this is not upgrade damage, but `ADC().read_battery_voltage()` raises
+`OSError: [Errno 121] Remote I/O error` and no graph has been run. The sensors graph is the
+outstanding check; it is in PENDING.
+
+---
+
 ## 2026-08-17 — Camera fails identically on Ubuntu 26.04 with kernel 7.0 and libcamera 0.7, closing the software question for good
 
 Rebooted onto the upgraded stack and reran the camera tests. The result is the predicted one,
