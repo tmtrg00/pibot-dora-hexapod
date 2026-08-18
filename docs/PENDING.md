@@ -9,13 +9,6 @@ tells you something.
 
 ## Active
 
-- [IN-FLIGHT 2026-08-18] **Verify walking in named stances on hardware.** `./run.sh stancewalk`
-  walks forward then backward in narrow, neutral and wide. The offline frame-by-frame gait
-  simulation (`stances.validate_for_gait`) already rejects **narrow** for forward walking —
-  mid-gait reach 88.7mm undershoots the 90mm hard limit, so the node skips it and logs why;
-  seeing that skip line in a live run is part of the verification. Compare stability wide vs
-  neutral by eye. Needs floor space ahead of the robot.
-
 - [PINNED 2026-08-17] **Camera produces no frames on Ubuntu, but works on Raspberry Pi OS on this
   same board. The hardware is fine — do NOT RMA the Pi.** This replaces the previous entry, which
   said the RP1 receiver was defective; see CHANGELOG 2026-08-17 for why that was wrong. The

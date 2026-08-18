@@ -7,6 +7,34 @@ revert an old entry.
 
 ---
 
+## 2026-08-18 — Stance-aware walking verified on hardware; the run also caught and fixed a stance-transition bug its own test had been hiding
+
+`./run.sh stancewalk` ran live twice, owner watching, and the footprint-carries-into-the-gait
+mechanism is confirmed: the robot walked 3 cycles forward and 3 back in `neutral`, then in
+`wide` (spread 1.12, leg reach 174mm), returning roughly to its start each time. The `narrow`
+skip fired exactly as designed — the offline frame-by-frame gait check rejected it live with
+"mid-gait leg reach 88.7mm below 98.0mm" before any servo moved. Battery bottomed at 6.35V
+under walking load, above the 6.0V floor; the ADC fix held throughout. The owner confirmed
+both runs looked right.
+
+**Fix: the geometry drift check refused any stance change away from a spread stance.**
+`stances.verify_against()` compared live `Control.body_points` against the stock
+BASE_FOOTPRINT — but after `wide` is applied, body_points legitimately holds the 1.12-scaled
+values, so the return to `neutral` was refused as "drift" and the first run ended with the
+robot still in wide. The hardware node now remembers the footprint it last applied and the
+drift check compares against that. Verified live in a second run: wide → walk → **neutral
+re-applied cleanly** (reach back to 147mm stock), 5/5 steps ok.
+
+**Fix: a refused stance reported as success.** That first failing run summarised "8/8 steps
+ok" around the refusal, a two-part reporting hole: the hardware node set the `refused` flag
+only for battery-gate refusals (apply_stance failures lived only in the text), and the test
+nodes' fallback text match looked for "FAILED"/"rejected" but not "refused". `apply_stance`
+now returns (ok, text) with the flag set from it, and both stance test nodes match "refused"
+too. The lesson is the project's founding one, resurfacing in miniature: a failure that only
+exists as prose in a success-shaped message is a silent failure.
+
+---
+
 ## 2026-08-18 — Closed-loop turning verified on hardware: 90° reached with a 1.5° residual in four gait cycles
 
 Second live run of `PIBOT_TURN_CLOSED_LOOP=1 PIBOT_TURN_DEGREES=90 ./run.sh turn`, with both
