@@ -7,6 +7,23 @@ revert an old entry.
 
 ---
 
+## 2026-08-18 — Crab walking verified: the owner ran `./run.sh crabwalk` themselves and confirmed it works
+
+The lateral gait went from request to verified in one pass: the graph walks sideways right
+then left back to its start using the gait engine's x=±35 stride (a true lateral gait, not a
+turn), with the same offline frame-by-frame reach validation as the other locomotion graphs —
+which rejects `narrow` sideways (79.8mm minimum reach against the 90mm hard limit, its third
+consistent rejection across forward, turning was fine, and lateral) and clears every other
+stance. The owner ran the test themselves and confirmed the robot crab-walks; no node
+processes were left behind. Options recorded in the node header: stance, cycles, rounds,
+speed (`PIBOT_CRABWALK_*`).
+
+With this, every locomotion mode the gait engine offers is exercised through the dora graph
+and verified on hardware in a single day: forward/backward walking (in two footprints),
+closed-loop turning to ±0.5°, and now lateral crab walking.
+
+---
+
 ## 2026-08-18 — The full 360° turn: 15 gait cycles, 0.5° residual, and the flat-battery-era milestone finally cleared
 
 `PIBOT_TURN_CLOSED_LOOP=1 PIBOT_TURN_DEGREES=360 ./run.sh turn`, owner watching and
