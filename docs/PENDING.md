@@ -9,15 +9,6 @@ tells you something.
 
 ## Active
 
-- [IN-FLIGHT 2026-08-18] **Verify closed-loop turning (`turn_to`) on hardware — second
-  attempt.** The first live run (2026-08-18) turned the robot but then oscillated across the
-  target without stopping and finally froze; both causes are found and fixed (CHANGELOG
-  2026-08-18: the unbounded ADC stable-read loop, and the 36°-per-cycle turn quantum from
-  walk()'s single-shot behaviour). turn_to now commands single gait cycles with the angle
-  scaled 1..8 to the remaining error (~4.5–36°/cycle) and logs every cycle. Not yet re-run.
-  `PIBOT_TURN_CLOSED_LOOP=1 PIBOT_TURN_DEGREES=90 ./run.sh turn`, eyeball against a floor
-  mark, check the logged per-cycle rotation against the 4.5°/unit seed, then the full 360.
-
 - [IN-FLIGHT 2026-08-18] **Verify walking in named stances on hardware.** `./run.sh stancewalk`
   walks forward then backward in narrow, neutral and wide. The offline frame-by-frame gait
   simulation (`stances.validate_for_gait`) already rejects **narrow** for forward walking —

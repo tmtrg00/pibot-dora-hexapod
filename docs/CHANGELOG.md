@@ -7,6 +7,31 @@ revert an old entry.
 
 ---
 
+## 2026-08-18 — Closed-loop turning verified on hardware: 90° reached with a 1.5° residual in four gait cycles
+
+Second live run of `PIBOT_TURN_CLOSED_LOOP=1 PIBOT_TURN_DEGREES=90 ./run.sh turn`, with both
+fixes from the first run in place. The robot turned 90° to the right and stopped; the owner
+confirmed the result. The per-cycle log tells the whole story: three cycles at angle 8
+(measured −23.5°, −24.4°, −25.2° of integrated yaw), then the planner scaled the last cycle
+down to angle 5 for the remaining 16.9° (measured −15.5°), finishing at −88.5° integrated —
+**residual 1.5° against a 5° tolerance, four gait cycles, ~14 s of motion, no oscillation and
+no overshoot**. Servos relaxed cleanly at the end of the graph.
+
+What this verifies beyond the headline: the ADC stable-read fix held (a forced battery read
+before every cycle, none of them hung; the pack read 6.59–7.29 V under load, above the 6.0 V
+floor, incidentally the first loaded reading since the pack was charged); the gyro sign
+convention was learned correctly on the first cycle (right turn reads negative on this
+mounting, `sense=-1`); and the adaptive per-angle-unit estimate pulled the 4.5°/unit seed down
+to a measured 3.3°/unit (~26°/cycle at angle 8 on this floor) and planned correctly with it.
+
+Two observations for later, neither blocking: the calibration warned "robot was not still"
+(15.9 deg/s gyro spread) because the servos had just driven to standing and were still
+jittering — a short settle before calibrating would quiet it; and the closed-loop turn graph
+does not terminate on its own (the hardware node ticks forever after the turn node exits), so
+the run ends by Ctrl+C, which the owner did. Neither affected the result.
+
+---
+
 ## 2026-08-18 — First live turn_to run: the robot turned, then oscillated and froze — two bugs found, both fixed, neither yet re-verified
 
 The first hardware run of closed-loop turning (`PIBOT_TURN_CLOSED_LOOP=1 PIBOT_TURN_DEGREES=90
