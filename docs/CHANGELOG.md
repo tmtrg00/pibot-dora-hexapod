@@ -7,6 +7,24 @@ revert an old entry.
 
 ---
 
+## 2026-08-18 — The full 360° turn: 15 gait cycles, 0.5° residual, and the flat-battery-era milestone finally cleared
+
+`PIBOT_TURN_CLOSED_LOOP=1 PIBOT_TURN_DEGREES=360 ./run.sh turn`, owner watching and
+confirming. Fourteen cycles at angle 8 (remarkably consistent: −24.3° to −26.1° each), then
+one fine-trim cycle at angle 2 (−5.1°) to land at −359.5° integrated — **residual 0.5° against
+a 5° tolerance, 47 seconds of motion**. The battery never dropped below 6.47V under sustained
+locomotion, comfortably above the 6.0V floor with no override — the same manoeuvre that on
+2026-08-16 sagged the flat pack to 5.00V and aborted at 23 cycles.
+
+This closes the "complete 360° turn" milestone the flat-battery blocker named, and it is a
+better version than the one planned then: the open-loop plan needed a measured deg-per-cycle
+figure and dead reckoning over ~47 commanded cycles; the closed-loop turn needed no
+calibration constant at all and used 15 real cycles. The adaptive estimate settled at
+2.9°/unit (~23°/cycle at angle 8) — drifting down from 3.3 earlier in the evening as the pack
+and surface vary, which is exactly the variation closing the loop exists to absorb.
+
+---
+
 ## 2026-08-18 — Stance-aware walking verified on hardware; the run also caught and fixed a stance-transition bug its own test had been hiding
 
 `./run.sh stancewalk` ran live twice, owner watching, and the footprint-carries-into-the-gait
