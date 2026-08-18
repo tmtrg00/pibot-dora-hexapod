@@ -25,12 +25,21 @@ class ADC:
                 pass
         return iic_addr                                                       # Return the list of found I2C addresses
     def _read_stable_byte(self) -> int:
-        """Read a stable byte from the ADC."""
-        while True:
-            value1 = self.i2c_bus.read_byte(self.I2C_ADDRESS)                 # Read the first byte from the ADC
-            value2 = self.i2c_bus.read_byte(self.I2C_ADDRESS)                 # Read the second byte from the ADC
+        """Read a stable byte from the ADC.
+
+        Bounded: under servo load the reading ripples, and two consecutive
+        byte-identical reads may simply never happen — the original unbounded
+        loop hung the hardware node mid-turn on 2026-08-18. One LSB is ~59mV,
+        so after the attempt budget the latest read is accurate enough for a
+        battery gate and infinitely better than never returning.
+        """
+        value2 = self.i2c_bus.read_byte(self.I2C_ADDRESS)
+        for _ in range(50):
+            value1 = value2
+            value2 = self.i2c_bus.read_byte(self.I2C_ADDRESS)
             if value1 == value2:
                 return value1                                                 # Return the value if both reads are the same
+        return value2
 
     def read_channel_voltage(self, channel: int) -> float:
         """Read the ADC value for the specified channel using ADS7830."""

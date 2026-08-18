@@ -318,12 +318,14 @@ class Hardware:
 
         # Stand first: bias calibration needs a motionless robot, and a turn
         # started from a slumped pose drags feet.
+        logger.info(f"turn_to: target {target:+.1f}deg, tolerance {tol:.1f}deg — standing")
         run_action("stand", {}, self.hardware_dict)
 
         tracker = YawTracker(self.control.imu.sensor)
         bias, spread = tracker.calibrate(1.0)
         still = spread <= 8.0
         note = "" if still else f" (gyro spread {spread:.1f}deg/s during calibration — robot was not still)"
+        logger.info(f"turn_to: gyro bias {bias:+.2f}deg/s, spread {spread:.2f}deg/s")
 
         primary = "turn_right" if target > 0 else "turn_left"
         opposite = "turn_left" if target > 0 else "turn_right"
@@ -354,6 +356,13 @@ class Hardware:
 
                 direction = primary if remaining > 0 else opposite
                 cycles = max(1, min(TURN_SEGMENT_CYCLES, round(abs(remaining) / per_cycle)))
+                battery = self.last_battery
+                logger.info(
+                    f"turn_to: segment {segments + 1}: {direction} x{cycles} "
+                    f"(remaining {remaining:+.1f}deg, est {per_cycle:.1f}deg/cycle"
+                    + (f", battery {battery[0]:.2f}V" if battery else "")
+                    + ")"
+                )
                 before = tracker.yaw()
                 run_action(
                     "walk",
@@ -366,6 +375,10 @@ class Hardware:
                 segments += 1
 
                 measured = abs(delta) / cycles
+                logger.info(
+                    f"turn_to: segment {segments} rotated {delta:+.1f}deg "
+                    f"({measured:.1f}deg/cycle), integrated yaw {tracker.yaw():+.1f}deg"
+                )
                 if measured < 1.0:
                     weak_segments += 1
                     if weak_segments >= 2:
