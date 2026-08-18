@@ -67,11 +67,12 @@ BATTERY_MAX_AGE_S = 10.0
 # the graph be exercised on a bench with nothing able to move.
 NO_MOTION = os.environ.get("PIBOT_NO_MOTION", "").lower() in {"1", "true", "yes"}
 
-# Closed-loop turning. The open-loop figure measured 2026-08-16 (23 cycles of
-# walk(turn_right) ~ 180deg) seeds the planner; each segment's measured
-# rotation then refines it, so the seed only has to be roughly right.
-TURN_SEED_DEG_PER_CYCLE = 7.8
-TURN_SEGMENT_CYCLES = 5
+# Closed-loop turning. One turn gait cycle at angle=8 rotated the body ~36deg
+# (observed 2026-08-18 — the 2026-08-16 "7.8deg/cycle" was per *commanded*
+# cycle, but turn commands are single-shot in condition_monitor, so 23
+# commanded cycles were ~5 real ones). ~4.5deg per angle unit seeds the
+# planner; each cycle's measured rotation then refines it.
+TURN_SEED_DEG_PER_ANGLE_UNIT = 4.5
 TURN_TOLERANCE_DEG = 5.0
 TURN_SPEED = int(os.environ.get("PIBOT_TURN_SPEED", "6"))
 
@@ -291,12 +292,13 @@ class Hardware:
     def turn_to(self, degrees, tolerance=None) -> str:
         """Rotate in place by `degrees`, closed-loop on the z gyro.
 
-        Runs short walk(turn_*) segments and re-plans from the measured
-        rotation after each one, so gait slip, surface and battery state stop
-        mattering: the loop keeps stepping (in either direction) until the
-        integrated yaw is within tolerance of the target. Positive degrees is
-        turn_right, negative turn_left; the gyro's sign convention relative to
-        turn_right is not assumed — it is learned from the first segment.
+        Runs single turn gait cycles with the angle scaled to the remaining
+        error and re-plans from the measured rotation after each one, so gait
+        slip, surface and battery state stop mattering: the loop keeps
+        stepping (in either direction) until the integrated yaw is within
+        tolerance of the target. Positive degrees is turn_right, negative
+        turn_left; the gyro's sign convention is not assumed — it is learned
+        from the first cycle.
 
         Blocks this node's event loop for the whole turn, exactly as a long
         `walk` already does; the battery is re-read between segments here
@@ -327,15 +329,33 @@ class Hardware:
         note = "" if still else f" (gyro spread {spread:.1f}deg/s during calibration — robot was not still)"
         logger.info(f"turn_to: gyro bias {bias:+.2f}deg/s, spread {spread:.2f}deg/s")
 
-        primary = "turn_right" if target > 0 else "turn_left"
-        opposite = "turn_left" if target > 0 else "turn_right"
-        per_cycle = TURN_SEED_DEG_PER_CYCLE
-        sense = 0.0  # +1/-1 once the first segment reveals the gyro's sign for `primary`
-        max_cycles = int(math.ceil(abs(target) / 3.0)) + 10  # runaway cap at a pessimistic 3deg/cycle
-        cycles_done = 0
-        segments = 0
-        weak_segments = 0
+        # A turn command (x=0, y=0) is SINGLE-SHOT in condition_monitor: one
+        # run_gait cycle, queue cleared — walk()'s `steps` argument does not
+        # multiply it. Measured 2026-08-18: at angle=8 one cycle rotates ~36deg,
+        # so going through walk() gives a 36deg quantum that can never settle
+        # into a small tolerance (the robot oscillates across the target
+        # forever). Instead each step here queues CMD_MOVE directly with an
+        # angle scaled to the remaining error: angle 1..8 spans roughly
+        # 4.5..36deg per cycle, which is fine enough to land inside tolerance.
+        per_unit = TURN_SEED_DEG_PER_ANGLE_UNIT
+        sense = 0.0  # +1/-1 once the first step reveals the gyro's sign for a right turn
+        max_steps = int(math.ceil(abs(target) / TURN_SEED_DEG_PER_ANGLE_UNIT)) + 12
+        steps_done = 0
+        weak_steps = 0
         outcome = "reached tolerance"
+
+        def one_cycle(angle: int) -> bool:
+            """Queue a single turn gait cycle and wait for it to complete."""
+            control = self.control
+            control.command_queue = [cmd.CMD_MOVE, "1", "0", "0", str(TURN_SPEED), str(angle)]
+            control.timeout = time.time()
+            end = time.time() + 15.0
+            while time.time() < end:
+                queue_now = getattr(control, "command_queue", None)
+                if isinstance(queue_now, list) and queue_now and queue_now[0] == "":
+                    return True
+                time.sleep(0.05)
+            return False
 
         tracker.start()
         try:
@@ -344,8 +364,8 @@ class Hardware:
                 remaining = abs(target) - progress
                 if abs(remaining) <= tol:
                     break
-                if cycles_done >= max_cycles:
-                    outcome = f"stopped at the {max_cycles}-cycle safety cap"
+                if steps_done >= max_steps:
+                    outcome = f"stopped at the {max_steps}-step safety cap"
                     break
 
                 self.read_battery(force=True)
@@ -354,50 +374,52 @@ class Hardware:
                     outcome = f"aborted: {refusal}"
                     break
 
-                direction = primary if remaining > 0 else opposite
-                cycles = max(1, min(TURN_SEGMENT_CYCLES, round(abs(remaining) / per_cycle)))
+                # Positive angle is turn_right (walk() uses +8/-8); flip it
+                # when correcting an overshoot.
+                magnitude = max(1, min(8, round(abs(remaining) / per_unit)))
+                rightward = (target > 0) == (remaining > 0)
+                angle = magnitude if rightward else -magnitude
                 battery = self.last_battery
                 logger.info(
-                    f"turn_to: segment {segments + 1}: {direction} x{cycles} "
-                    f"(remaining {remaining:+.1f}deg, est {per_cycle:.1f}deg/cycle"
+                    f"turn_to: step {steps_done + 1}: angle {angle:+d} "
+                    f"(remaining {remaining:+.1f}deg, est {per_unit:.1f}deg/unit"
                     + (f", battery {battery[0]:.2f}V" if battery else "")
                     + ")"
                 )
                 before = tracker.yaw()
-                run_action(
-                    "walk",
-                    {"direction": direction, "steps": cycles, "speed": TURN_SPEED},
-                    self.hardware_dict,
-                )
-                time.sleep(0.4)  # let the last step settle before trusting the yaw delta
+                completed = one_cycle(angle)
+                time.sleep(0.4)  # let the step settle before trusting the yaw delta
                 delta = tracker.yaw() - before
-                cycles_done += cycles
-                segments += 1
+                steps_done += 1
 
-                measured = abs(delta) / cycles
                 logger.info(
-                    f"turn_to: segment {segments} rotated {delta:+.1f}deg "
-                    f"({measured:.1f}deg/cycle), integrated yaw {tracker.yaw():+.1f}deg"
+                    f"turn_to: step {steps_done} rotated {delta:+.1f}deg, "
+                    f"integrated yaw {tracker.yaw():+.1f}deg"
+                    + ("" if completed else " (gait thread never cleared the command)")
                 )
-                if measured < 1.0:
-                    weak_segments += 1
-                    if weak_segments >= 2:
+                if not completed:
+                    outcome = "aborted: the gait thread did not execute a turn cycle"
+                    break
+                if abs(delta) < 1.0:
+                    weak_steps += 1
+                    if weak_steps >= 2:
                         outcome = (
-                            f"aborted: two consecutive segments produced under 1deg/cycle "
-                            f"({measured:.2f}deg/cycle last) — the gait is not rotating the body"
+                            f"aborted: two consecutive cycles rotated under 1deg "
+                            f"({delta:+.2f}deg last) — the gait is not rotating the body"
                         )
                         break
                     continue
-                weak_segments = 0
+                weak_steps = 0
 
                 if sense == 0.0:
-                    # The first productive segment always runs in `primary`
-                    # (progress is 0 until sense is known), so its yaw sign is
-                    # the gyro's sign for progress toward the target.
+                    # The first productive cycle always runs toward the target
+                    # (progress is 0 until sense is known), so whatever yaw
+                    # sign it produced is, by definition, the sign of progress.
                     sense = 1.0 if delta > 0 else -1.0
-                # Blend toward the measured rate; a single noisy segment
-                # should not swing the plan hard.
-                per_cycle = max(3.0, min(15.0, 0.6 * per_cycle + 0.4 * measured))
+                # Blend toward the measured per-angle-unit rate; one noisy
+                # cycle should not swing the plan hard.
+                measured_unit = abs(delta) / magnitude
+                per_unit = max(1.5, min(12.0, 0.6 * per_unit + 0.4 * measured_unit))
         finally:
             final_yaw = tracker.stop()
             run_action("stand", {}, self.hardware_dict)
@@ -408,8 +430,8 @@ class Hardware:
         battery_txt = f", battery {battery[0]:.2f}V/{battery[1]:.2f}V" if battery else ""
         return (
             f"turn_to {outcome}: target {target:+.1f}deg, rotated {signed_achieved:+.1f}deg "
-            f"(residual {target - signed_achieved:+.1f}deg) in {cycles_done} cycles over "
-            f"{segments} segment(s), measured {per_cycle:.1f}deg/cycle, "
+            f"(residual {target - signed_achieved:+.1f}deg) in {steps_done} gait cycle(s), "
+            f"measured {per_unit:.1f}deg per angle unit, "
             f"gyro bias {bias:+.2f}deg/s{battery_txt}{note}"
         )
 

@@ -9,15 +9,14 @@ tells you something.
 
 ## Active
 
-- [IN-FLIGHT 2026-08-18] **Verify closed-loop turning (`turn_to`) on hardware.** The code is
-  written and committed but has never driven a servo: the `hardware` node gained a `turn_to`
-  tool that calibrates the gyro-z bias standing still, integrates yaw in a 200Hz sampler
-  thread during the gait, and re-plans short walk(turn_*) segments from measured rotation
-  until within tolerance (default 5°), with battery re-reads between segments. Run
-  `PIBOT_TURN_CLOSED_LOOP=1 PIBOT_TURN_DEGREES=90 ./run.sh turn` first (a 90° turn is short
-  and easy to eyeball against a floor mark), then the full 360. Watch for: the gyro sign
-  convention (learned from the first segment — check the reported rotation sign matches
-  reality), and the measured deg/cycle the summary reports versus the 7.8 seed.
+- [IN-FLIGHT 2026-08-18] **Verify closed-loop turning (`turn_to`) on hardware — second
+  attempt.** The first live run (2026-08-18) turned the robot but then oscillated across the
+  target without stopping and finally froze; both causes are found and fixed (CHANGELOG
+  2026-08-18: the unbounded ADC stable-read loop, and the 36°-per-cycle turn quantum from
+  walk()'s single-shot behaviour). turn_to now commands single gait cycles with the angle
+  scaled 1..8 to the remaining error (~4.5–36°/cycle) and logs every cycle. Not yet re-run.
+  `PIBOT_TURN_CLOSED_LOOP=1 PIBOT_TURN_DEGREES=90 ./run.sh turn`, eyeball against a floor
+  mark, check the logged per-cycle rotation against the 4.5°/unit seed, then the full 360.
 
 - [IN-FLIGHT 2026-08-18] **Verify walking in named stances on hardware.** `./run.sh stancewalk`
   walks forward then backward in narrow, neutral and wide. The offline frame-by-frame gait

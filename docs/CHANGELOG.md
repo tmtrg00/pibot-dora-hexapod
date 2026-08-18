@@ -7,6 +7,42 @@ revert an old entry.
 
 ---
 
+## 2026-08-18 — First live turn_to run: the robot turned, then oscillated and froze — two bugs found, both fixed, neither yet re-verified
+
+The first hardware run of closed-loop turning (`PIBOT_TURN_CLOSED_LOOP=1 PIBOT_TURN_DEGREES=90
+./run.sh turn`, battery 6.59V unloaded) rotated the robot to roughly the target and then kept
+stepping back and forth across it without terminating; the run produced no result within its
+240s budget, survived SIGINT, and had to be SIGKILLed, leaving the servos energised until they
+were relaxed manually (`Servo().relax()` plus the power-disable pin). Node logs were lost with
+the killed processes' stdout buffers — the per-segment logging added afterwards exists because
+of exactly that blindness.
+
+**Fix: the unbounded ADC stable-read loop.** `ADC._read_stable_byte()` in the forked driver
+spun in `while True` until two consecutive I2C reads returned byte-identical values. Under
+servo load the pack reading ripples continuously (6.53–7.18V across the three telemetry lines
+before the turn), so identical consecutive reads can simply never arrive — and turn_to
+force-reads the battery between segments, right when the servos are holding pose. Now capped
+at 50 read pairs, returning the latest byte after that (1 LSB ≈ 59mV, ample for a battery
+gate). This was a latent upstream bug: the same call sits on the telemetry tick path of every
+graph, and it is precisely the silent-unbounded-loop class the MASTERPLAN names as the reason
+this project exists — found in our own fork, not the thread it was looking for.
+
+**Fix: the 36° turn quantum.** In `condition_monitor`, a turn command (x=0, y=0) takes the
+single-shot branch: one `run_gait` cycle, queue cleared — `walk()`'s `steps` argument does not
+multiply it. One cycle at angle=8 rotates the body ~36°, so turn_to's walk()-based segments
+could never settle into a ±5° tolerance: every correction overshot by ~36° in the other
+direction, which is the oscillation observed. This also reinterprets the 2026-08-16
+measurement: "23 cycles → 180° → 7.8°/cycle" counted *commanded* cycles; the robot really ran
+~5 single-shot cycles at ~36° each. turn_to now bypasses `walk()` and queues `CMD_MOVE`
+directly with the angle scaled 1..8 to the remaining error (~4.5°..36° per cycle, adaptive
+per-unit estimate), making the tolerance actually reachable, and logs every cycle: commanded
+angle, measured rotation, integrated yaw, battery.
+
+Neither fix has run on hardware yet; the turn_to PENDING item stays IN-FLIGHT with a re-run as
+its exit condition.
+
+---
+
 ## 2026-08-18 — Closed-loop turning and stance-aware walking implemented; the offline gait check already caught `narrow` as unwalkable
 
 Two of the three deferred movement items are now code, awaiting hardware verification (both
