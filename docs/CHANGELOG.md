@@ -7,6 +7,31 @@ revert an old entry.
 
 ---
 
+## 2026-08-18 — The sensors graph ran clean on the rebuilt venv: the Python 3.14 stack is verified against real hardware
+
+First hardware run since the venv rebuild (CHANGELOG 2026-08-17, "Rebuilt the venv on Python
+3.14"). With the robot electronics powered, `i2cdetect -y 1` showed all four expected devices
+(0x40, 0x41 PCA9685; 0x48 ADS7830; 0x68 MPU6050), and `./run.sh sensors` ran for 45 seconds
+under a SIGINT timeout with all four nodes (`hardware`, `ultrasonic`, `led`, `probe`) coming
+up, exchanging telemetry, and exiting with status Success. No orphaned node processes
+afterwards.
+
+What this exercised that the import test could not: `rpi_ws281x` drove the SPI LED strip
+("LED strip ready", emotions cycling on schedule) and `lgpio` ran the HC-SR04 (plausible
+distances of 20.1–40.9 cm) — both under kernel 7.0.0-1016-raspi. Battery telemetry flowed
+every 2 s: load rail 7.18–7.76 V, Pi rail a steady 8.06–8.12 V, with no servo load
+(`PIBOT_NO_MOTION=1`). The graph ran from `/opt/pibot-dora` itself — worktrees carry no venv,
+so hardware runs always launch from the main checkout.
+
+The pack has evidently been charged since the flat-battery measurements of 2026-08-16
+(these readings are ~1.2 V above the 5.88–6.00 V loaded readings then), but today's numbers
+are unloaded and the pinned battery entry requires a reading under servo load before the
+motion blockers clear, so that entry stands.
+
+**Fix:** none needed — everything worked first try.
+
+---
+
 ## 2026-08-17 — Merged the parallel camera investigation and retracted its hardware verdict: do not buy a cable, a camera module or a board
 
 Merged `origin/main`, which carried a parallel investigation from 2026-08-16 that this branch

@@ -59,15 +59,6 @@ tells you something.
     never tried, but they exist to rescue a marginal link and Pi OS works here at the default,
     so there is no marginal link to rescue. Low value.
 
-- [PINNED 2026-08-17] **The rebuilt venv has never touched hardware — run the sensors graph
-  before trusting it.** It is verified only at import level (CHANGELOG 2026-08-17): all 19
-  third-party and all 16 project modules load under Python 3.14.4, but no graph has run and no
-  device has responded. The robot electronics are unpowered — the I2C bus scans empty at every
-  address and `ADC().read_battery_voltage()` raises `OSError: [Errno 121]`. Power the
-  electronics, confirm `i2cdetect -y 1` shows 0x40, 0x41, 0x48 and 0x68, then `./run.sh sensors`.
-  Watch particularly for `rpi_ws281x` (SPI LEDs) and `lgpio` under the new kernel, neither of
-  which an import test can exercise.
-
 - [TODO 2026-08-17] **Rewrite `requirements.txt` to match what is actually installed.** It is now
   actively misleading: a 90+ line inherited freeze pinning `anthropic`, `google-generativeai`,
   `groq`, `ollama`, Adafruit CircuitPython and `luma.oled`, none of which the code imports and
