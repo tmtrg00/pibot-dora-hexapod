@@ -129,6 +129,7 @@ TOOL_OWNER: Dict[str, str] = {
     "move_head": "hardware",
     "get_battery": "hardware",
     "set_stance": "hardware",
+    "turn_to": "hardware",
     "set_led": "led",
     "buzz": "buzzer",
     "get_distance": "ultrasonic",
@@ -146,6 +147,7 @@ MOTION_TOOLS = {
     "dance",
     "move_head",
     "set_stance",
+    "turn_to",
 }
 
 
@@ -180,6 +182,41 @@ def stance_tool_schema() -> Dict[str, Any]:
             },
         },
     }
+
+def turn_tool_schema() -> Dict[str, Any]:
+    """OpenAI tool schema for turn_to, appended to the upstream TOOLS list.
+
+    Like set_stance, this lives here because closed-loop turning is this
+    project's work and the upstream tool list stays untouched. `walk` with
+    turn_left/turn_right remains the open-loop primitive; turn_to is the
+    accurate version, closed on the gyro.
+    """
+    return {
+        "type": "function",
+        "function": {
+            "name": "turn_to",
+            "description": (
+                "Rotate in place by a measured angle, closed-loop on the gyro. "
+                "Positive degrees turn right (clockwise from above), negative "
+                "turn left. More accurate than walk(turn_*), which is open-loop."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "degrees": {
+                        "type": "number",
+                        "description": "Signed rotation target in degrees (-360..360).",
+                    },
+                    "tolerance": {
+                        "type": "number",
+                        "description": "Stop when within this many degrees of the target (default 5).",
+                    },
+                },
+                "required": ["degrees"],
+            },
+        },
+    }
+
 
 # Volts. Below this the servos brown out mid-lift and the robot drops onto its
 # own legs; deep-discharging the 2S pack can kill it.

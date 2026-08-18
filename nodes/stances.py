@@ -160,6 +160,121 @@ def validate(stance: Stance, margin: float = REACH_MARGIN_MM) -> Tuple[bool, Lis
     return True, reaches, "ok"
 
 
+# run_gait lifts the swing legs by this much (the Z default in run_gait).
+GAIT_LIFT_MM = 40.0
+
+
+def simulate_gait_reach(
+    stance: Stance, x: int = 0, y: int = 0, angle: int = 0, speed: int = 6
+) -> Tuple[float, float]:
+    """Worst-case leg reach over one tripod gait cycle in this stance, offline.
+
+    The static `validate()` check covers the resting pose only. Walking is
+    harder on reach: run_gait deep-copies `body_points` (so a wide stance
+    starts every leg further out), shifts feet by up to the full stride, and
+    lifts swing legs 40mm — any of which can push a leg outside the 90..248mm
+    window mid-cycle. When that happens `set_leg_angles()` skips the frame
+    silently, which on a real robot looks like a stutter or a dragged foot.
+
+    This replicates the tripod ("1") gait arithmetic from `Control.run_gait`
+    frame by frame — same phase structure, same 4x/8x step factors, same lift —
+    and returns (min_reach, max_reach) across every leg and frame, so a
+    stance+direction combination can be rejected before a servo moves.
+    The wave gait ("2") is not simulated; the test graphs drive gait 1.
+    """
+    f_frames = round((22 - 126) * (speed - 2) / (10 - 2) + 126)  # map_value(speed, 2,10, 126,22)
+    z_step = GAIT_LIFT_MM / f_frames
+    body_height = Z_BASE_MM - stance.z
+    points = [[fx, fy, body_height] for fx, fy in stance.footprint()]
+
+    rad = math.radians(angle)
+    xy = [
+        [
+            ((px * math.cos(rad) + py * math.sin(rad) - px) + x) / f_frames,
+            ((-px * math.sin(rad) + py * math.cos(rad) - py) + y) / f_frames,
+        ]
+        for px, py, _ in points
+    ]
+
+    def frame_reaches() -> List[float]:
+        out = []
+        for (px, py, pz), (ang_deg, offset) in zip(points, LEG_TRANSFORMS):
+            a = math.radians(ang_deg)
+            lx = px * math.cos(a) + py * math.sin(a) - offset
+            ly = -px * math.sin(a) + py * math.cos(a)
+            lz = pz + Z_LEG_OFFSET_MM
+            out.append(math.sqrt(lx * lx + ly * ly + lz * lz))
+        return out
+
+    lo = min(frame_reaches())
+    hi = max(frame_reaches())
+    for j in range(f_frames):
+        for i in range(3):
+            if j < (f_frames / 8):
+                points[2 * i][0] -= 4 * xy[2 * i][0]
+                points[2 * i][1] -= 4 * xy[2 * i][1]
+                points[2 * i + 1][0] += 8 * xy[2 * i + 1][0]
+                points[2 * i + 1][1] += 8 * xy[2 * i + 1][1]
+                points[2 * i + 1][2] = GAIT_LIFT_MM + body_height
+            elif j < (f_frames / 4):
+                points[2 * i][0] -= 4 * xy[2 * i][0]
+                points[2 * i][1] -= 4 * xy[2 * i][1]
+                points[2 * i + 1][2] -= z_step * 8
+            elif j < (3 * f_frames / 8):
+                points[2 * i][2] += z_step * 8
+                points[2 * i + 1][0] -= 4 * xy[2 * i + 1][0]
+                points[2 * i + 1][1] -= 4 * xy[2 * i + 1][1]
+            elif j < (5 * f_frames / 8):
+                points[2 * i][0] += 8 * xy[2 * i][0]
+                points[2 * i][1] += 8 * xy[2 * i][1]
+                points[2 * i + 1][0] -= 4 * xy[2 * i + 1][0]
+                points[2 * i + 1][1] -= 4 * xy[2 * i + 1][1]
+            elif j < (3 * f_frames / 4):
+                points[2 * i][2] -= z_step * 8
+                points[2 * i + 1][0] -= 4 * xy[2 * i + 1][0]
+                points[2 * i + 1][1] -= 4 * xy[2 * i + 1][1]
+            elif j < (7 * f_frames / 8):
+                points[2 * i][0] -= 4 * xy[2 * i][0]
+                points[2 * i][1] -= 4 * xy[2 * i][1]
+                points[2 * i + 1][2] += z_step * 8
+            else:
+                points[2 * i][0] -= 4 * xy[2 * i][0]
+                points[2 * i][1] -= 4 * xy[2 * i][1]
+                points[2 * i + 1][0] += 8 * xy[2 * i + 1][0]
+                points[2 * i + 1][1] += 8 * xy[2 * i + 1][1]
+        reaches = frame_reaches()
+        lo = min(lo, min(reaches))
+        hi = max(hi, max(reaches))
+    return lo, hi
+
+
+def validate_for_gait(
+    stance: Stance,
+    x: int = 0,
+    y: int = 0,
+    angle: int = 0,
+    speed: int = 6,
+    margin: float = REACH_MARGIN_MM,
+) -> Tuple[bool, float, float, str]:
+    """Check a stance stays reachable while walking. (ok, min, max, reason)."""
+    ok, _, reason = validate(stance, margin)
+    if not ok:
+        return False, 0.0, 0.0, f"static pose already invalid: {reason}"
+    lo, hi = simulate_gait_reach(stance, x, y, angle, speed)
+    low, high = MIN_REACH_MM + margin, MAX_REACH_MM - margin
+    if hi > high:
+        return False, lo, hi, (
+            f"mid-gait leg reach {hi:.1f}mm exceeds {high:.1f}mm "
+            f"(hard limit {MAX_REACH_MM:.0f}mm, margin {margin:.0f}mm)"
+        )
+    if lo < low:
+        return False, lo, hi, (
+            f"mid-gait leg reach {lo:.1f}mm below {low:.1f}mm "
+            f"(hard limit {MIN_REACH_MM:.0f}mm, margin {margin:.0f}mm)"
+        )
+    return True, lo, hi, "ok"
+
+
 def verify_against(control) -> Tuple[bool, str]:
     """Cross-check the mirrored geometry against a live Control instance."""
     try:
@@ -192,3 +307,19 @@ if __name__ == "__main__":
           f"usable {MIN_REACH_MM + REACH_MARGIN_MM:.0f}..{MAX_REACH_MM - REACH_MARGIN_MM:.0f}mm "
           f"with a {REACH_MARGIN_MM:.0f}mm margin")
     print(f"{len(STANCES) - failures}/{len(STANCES)} stances reachable")
+
+    print()
+    print("walking in each stance (tripod gait, speed 6, simulated frame by frame):")
+    print(f"{'stance':<14} {'fwd y=35':>22} {'turn angle=8':>22}")
+    print("-" * 84)
+    for stance in STANCES.values():
+        cells = []
+        reasons = []
+        for x, y, angle in ((0, 35, 0), (0, 0, 8)):
+            ok, lo, hi, reason = validate_for_gait(stance, x, y, angle)
+            cells.append(f"{lo:6.1f}..{hi:6.1f} {'OK' if ok else 'REJECT'}")
+            if not ok:
+                reasons.append(reason)
+        print(f"{stance.name:<14} {cells[0]:>22} {cells[1]:>22}")
+        for reason in reasons:
+            print(f"{'':<14}   {reason}")

@@ -7,6 +7,63 @@ revert an old entry.
 
 ---
 
+## 2026-08-18 — Closed-loop turning and stance-aware walking implemented; the offline gait check already caught `narrow` as unwalkable
+
+Two of the three deferred movement items are now code, awaiting hardware verification (both
+carried as IN-FLIGHT in PENDING). No servo has moved under this code yet.
+
+**Closed-loop turning.** The `hardware` node gained a `turn_to` tool (`nodes/hardware_node.py`):
+a `YawTracker` thread samples the MPU6050 z-gyro raw register (one I2C word per sample, ~200Hz,
+instead of the seven transactions `get_gyro_data()` costs — the sampler shares the bus with
+~1800 servo writes/s mid-gait), calibrates its bias over 1s standing still, and integrates yaw
+while short `walk(turn_*)` segments run. After each segment the plan is recomputed from
+measured rotation: the deg/cycle estimate starts at the 7.8 measured on 2026-08-16 and blends
+40% toward each segment's measurement, the gyro's sign convention is learned from the first
+segment rather than assumed, overshoot turns back the other way, and two consecutive segments
+under 1°/cycle abort the turn as "the gait is not rotating the body". Battery is force-read
+between segments against the same floor gate as every motion tool. `turn_to` is registered in
+`TOOL_OWNER`/`MOTION_TOOLS`, exposed to the LLM via `turn_tool_schema()` (15 tools now), and
+`turn_node.py` gained `PIBOT_TURN_CLOSED_LOOP=1`, which replaces the segment scheduling with a
+single `turn_to` call and a 300s step budget.
+
+**Stances in gaits.** `nodes/stances.py` gained `simulate_gait_reach()` /
+`validate_for_gait()`, a frame-by-frame offline replay of `run_gait`'s tripod arithmetic (same
+phase structure, same 4×/8× factors, same 40mm lift) that returns worst-case leg reach over a
+full cycle in a given stance and direction. The static check passes all 8 stances; the gait
+check found that **walking forward in `narrow` (spread 0.90) undershoots the reach window —
+88.7mm against the 90mm hard limit** — which on the robot would be silent per-frame no-ops from
+`set_leg_angles()`, i.e. a stuttering dragged-foot gait with no error anywhere. Turning in
+narrow is fine (116.2mm min); `wide` and `brace` walk with margin (139.0mm min, 204.3mm max).
+A new `stance_walk_test_node.py` + `dataflow-stancewalk.yml` (`./run.sh stancewalk`) walks
+forward/backward in narrow, neutral and wide, pre-validating each pair offline and skipping
+rejects with the reason logged — `narrow` will demonstrate the skip path.
+
+**Decision: the stance work stays in this project; the PENDING item asking where it should
+live (2026-08-16) is closed.** Upstreaming is not available to this project by its own binding
+rule — `/opt/pibot-hexapod` is never written — and the stance code is now more entangled here,
+not less: `set_stance` is served by the hardware node, the schema lives in `nodes/common.py`,
+and the new gait validation exists precisely because stances interact with this project's
+walking tests. The module remains deliberately dora-free (pure math + stdlib), so if the
+experiment is abandoned the owner can copy `nodes/stances.py` upstream as one file and expose
+it through `src/actions.py` there. Revisit only if the MASTERPLAN verdict retires this project.
+
+**Fix:** none — new capability, no defect corrected. The `narrow` finding is a defect *avoided*.
+
+---
+
+## 2026-08-18 — The flat-battery blocker is cleared at the owner's instruction; the pack has been charged
+
+**Decision: the [PINNED 2026-08-16] flat-battery entry is removed from PENDING at the owner's
+explicit instruction.** The pack has been charged since the 2026-08-16 measurements (6.94V
+rest / 5.88–6.00V loaded then; 7.18–7.76V on the load rail during the 2026-08-18 sensors run,
+unloaded). No reading under servo load has been taken yet — the first motion run will provide
+one, and the `hardware` node's 6.0V floor gate remains enforced in code either way, so a pack
+that sags under load still refuses motion on its own. The deliberate
+`PIBOT_BATTERY_FLOOR=5.0` overrides used during the 2026-08-16 tests are no longer in effect;
+motion runs from here use the default floor.
+
+---
+
 ## 2026-08-18 — The sensors graph ran clean on the rebuilt venv: the Python 3.14 stack is verified against real hardware
 
 First hardware run since the venv rebuild (CHANGELOG 2026-08-17, "Rebuilt the venv on Python

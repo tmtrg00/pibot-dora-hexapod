@@ -25,6 +25,7 @@ from __future__ import annotations
 import math
 import os
 import sys
+import threading
 import time
 from typing import Optional, Tuple
 
@@ -65,6 +66,86 @@ BATTERY_MAX_AGE_S = 10.0
 # would drive the legs to the standing pose just by being instantiated. Lets
 # the graph be exercised on a bench with nothing able to move.
 NO_MOTION = os.environ.get("PIBOT_NO_MOTION", "").lower() in {"1", "true", "yes"}
+
+# Closed-loop turning. The open-loop figure measured 2026-08-16 (23 cycles of
+# walk(turn_right) ~ 180deg) seeds the planner; each segment's measured
+# rotation then refines it, so the seed only has to be roughly right.
+TURN_SEED_DEG_PER_CYCLE = 7.8
+TURN_SEGMENT_CYCLES = 5
+TURN_TOLERANCE_DEG = 5.0
+TURN_SPEED = int(os.environ.get("PIBOT_TURN_SPEED", "6"))
+
+# MPU6050 z-gyro, read raw: one I2C word per sample instead of the seven
+# transactions get_gyro_data() spends, because the sampler shares the bus with
+# ~1800 servo writes/s while the gait runs.
+GYRO_Z_REG = 0x47
+GYRO_LSB_PER_DPS = 131.0  # the 250deg/s range src/imu.py configures
+
+
+class YawTracker:
+    """Integrates the z gyro into a yaw angle while the robot turns.
+
+    Yaw from gyro integration drifts, but a turn lasts tens of seconds and the
+    bias is measured immediately beforehand with the robot standing still, so
+    the drift over one turn is well under the stopping tolerance. The AHRS in
+    src/imu.py would do no better here: with no magnetometer its yaw is the
+    same integration, just harder to reason about.
+    """
+
+    def __init__(self, sensor) -> None:
+        self.sensor = sensor
+        self.bias_dps = 0.0
+        self._yaw_deg = 0.0
+        self._running = False
+        self._thread: Optional[threading.Thread] = None
+        self._lock = threading.Lock()
+
+    def _read_dps(self) -> float:
+        return self.sensor.read_i2c_word(GYRO_Z_REG) / GYRO_LSB_PER_DPS
+
+    def calibrate(self, seconds: float = 1.0) -> Tuple[float, float]:
+        """Measure gyro bias at rest. Returns (bias deg/s, sample spread deg/s)."""
+        samples = []
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            samples.append(self._read_dps())
+            time.sleep(0.005)
+        self.bias_dps = sum(samples) / len(samples)
+        return self.bias_dps, max(samples) - min(samples)
+
+    def start(self) -> None:
+        self._yaw_deg = 0.0
+        self._running = True
+        self._thread = threading.Thread(target=self._integrate, daemon=True)
+        self._thread.start()
+
+    def _integrate(self) -> None:
+        last = time.monotonic()
+        while self._running:
+            try:
+                dps = self._read_dps() - self.bias_dps
+            except Exception:
+                # One bad bus transaction mid-gait is survivable; a dead
+                # sampler thread would silently freeze the yaw estimate, so
+                # keep the loop alive and let the next sample land.
+                time.sleep(0.01)
+                last = time.monotonic()
+                continue
+            now = time.monotonic()
+            with self._lock:
+                self._yaw_deg += dps * (now - last)
+            last = now
+            time.sleep(0.005)
+
+    def yaw(self) -> float:
+        with self._lock:
+            return self._yaw_deg
+
+    def stop(self) -> float:
+        self._running = False
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+        return self.yaw()
 
 
 class Hardware:
@@ -207,6 +288,118 @@ class Hardware:
             f"max leg reach {actual:.0f}mm (predicted {max(reaches):.0f}mm){note}"
         )
 
+    def turn_to(self, degrees, tolerance=None) -> str:
+        """Rotate in place by `degrees`, closed-loop on the z gyro.
+
+        Runs short walk(turn_*) segments and re-plans from the measured
+        rotation after each one, so gait slip, surface and battery state stop
+        mattering: the loop keeps stepping (in either direction) until the
+        integrated yaw is within tolerance of the target. Positive degrees is
+        turn_right, negative turn_left; the gyro's sign convention relative to
+        turn_right is not assumed — it is learned from the first segment.
+
+        Blocks this node's event loop for the whole turn, exactly as a long
+        `walk` already does; the battery is re-read between segments here
+        rather than waiting on tick telemetry.
+        """
+        try:
+            target = float(degrees)
+        except (TypeError, ValueError):
+            return f"turn_to needs a numeric degrees value, got {degrees!r}"
+        target = max(-360.0, min(360.0, target))
+        try:
+            tol = float(tolerance) if tolerance is not None else TURN_TOLERANCE_DEG
+        except (TypeError, ValueError):
+            tol = TURN_TOLERANCE_DEG
+        tol = max(2.0, min(45.0, tol))
+
+        if abs(target) <= tol:
+            return f"turn_to: target {target:.1f}deg is already within the {tol:.1f}deg tolerance, not moving"
+
+        # Stand first: bias calibration needs a motionless robot, and a turn
+        # started from a slumped pose drags feet.
+        run_action("stand", {}, self.hardware_dict)
+
+        tracker = YawTracker(self.control.imu.sensor)
+        bias, spread = tracker.calibrate(1.0)
+        still = spread <= 8.0
+        note = "" if still else f" (gyro spread {spread:.1f}deg/s during calibration — robot was not still)"
+
+        primary = "turn_right" if target > 0 else "turn_left"
+        opposite = "turn_left" if target > 0 else "turn_right"
+        per_cycle = TURN_SEED_DEG_PER_CYCLE
+        sense = 0.0  # +1/-1 once the first segment reveals the gyro's sign for `primary`
+        max_cycles = int(math.ceil(abs(target) / 3.0)) + 10  # runaway cap at a pessimistic 3deg/cycle
+        cycles_done = 0
+        segments = 0
+        weak_segments = 0
+        outcome = "reached tolerance"
+
+        tracker.start()
+        try:
+            while True:
+                progress = tracker.yaw() * sense if sense else 0.0
+                remaining = abs(target) - progress
+                if abs(remaining) <= tol:
+                    break
+                if cycles_done >= max_cycles:
+                    outcome = f"stopped at the {max_cycles}-cycle safety cap"
+                    break
+
+                self.read_battery(force=True)
+                refusal = self.motion_refusal("walk", {})
+                if refusal is not None:
+                    outcome = f"aborted: {refusal}"
+                    break
+
+                direction = primary if remaining > 0 else opposite
+                cycles = max(1, min(TURN_SEGMENT_CYCLES, round(abs(remaining) / per_cycle)))
+                before = tracker.yaw()
+                run_action(
+                    "walk",
+                    {"direction": direction, "steps": cycles, "speed": TURN_SPEED},
+                    self.hardware_dict,
+                )
+                time.sleep(0.4)  # let the last step settle before trusting the yaw delta
+                delta = tracker.yaw() - before
+                cycles_done += cycles
+                segments += 1
+
+                measured = abs(delta) / cycles
+                if measured < 1.0:
+                    weak_segments += 1
+                    if weak_segments >= 2:
+                        outcome = (
+                            f"aborted: two consecutive segments produced under 1deg/cycle "
+                            f"({measured:.2f}deg/cycle last) — the gait is not rotating the body"
+                        )
+                        break
+                    continue
+                weak_segments = 0
+
+                if sense == 0.0:
+                    # The first productive segment always runs in `primary`
+                    # (progress is 0 until sense is known), so its yaw sign is
+                    # the gyro's sign for progress toward the target.
+                    sense = 1.0 if delta > 0 else -1.0
+                # Blend toward the measured rate; a single noisy segment
+                # should not swing the plan hard.
+                per_cycle = max(3.0, min(15.0, 0.6 * per_cycle + 0.4 * measured))
+        finally:
+            final_yaw = tracker.stop()
+            run_action("stand", {}, self.hardware_dict)
+
+        achieved = final_yaw * sense if sense else 0.0
+        signed_achieved = achieved if target > 0 else -achieved
+        battery = self.last_battery
+        battery_txt = f", battery {battery[0]:.2f}V/{battery[1]:.2f}V" if battery else ""
+        return (
+            f"turn_to {outcome}: target {target:+.1f}deg, rotated {signed_achieved:+.1f}deg "
+            f"(residual {target - signed_achieved:+.1f}deg) in {cycles_done} cycles over "
+            f"{segments} segment(s), measured {per_cycle:.1f}deg/cycle, "
+            f"gyro bias {bias:+.2f}deg/s{battery_txt}{note}"
+        )
+
     def motion_refusal(self, tool_name: str, args: dict) -> Optional[str]:
         """Return a refusal string if this motion command must not run."""
         gated = tool_name in MOTION_TOOLS
@@ -280,6 +473,29 @@ def main() -> None:
                 if name == "set_stance":
                     refusal = hw.motion_refusal("stand", args)
                     text = refusal if refusal is not None else hw.apply_stance(args.get("stance", ""))
+                    node.send_output(
+                        "tool_result",
+                        encode(
+                            {
+                                "id": call.get("id"),
+                                "name": name,
+                                "text": text,
+                                "refused": refusal is not None,
+                            }
+                        ),
+                    )
+                    continue
+
+                # turn_to is served here rather than by src/actions.py: it
+                # needs the IMU and re-plans between gait segments, both of
+                # which live on this side of the process boundary.
+                if name == "turn_to":
+                    refusal = hw.motion_refusal(name, args)
+                    text = (
+                        refusal
+                        if refusal is not None
+                        else hw.turn_to(args.get("degrees", 0), args.get("tolerance"))
+                    )
                     node.send_output(
                         "tool_result",
                         encode(

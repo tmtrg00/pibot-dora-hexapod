@@ -9,15 +9,22 @@ tells you something.
 
 ## Active
 
-- [PINNED 2026-08-16] **Battery pack is flat and needs charging before any further motion
-  work.** Measured 6.94V at rest but 5.88–6.00V under servo load, against a 6.0V floor; a
-  23-cycle turn sagged it to 5.00V against a 4.90V abort threshold, and it read 5.82V at rest
-  afterwards. Every motion test so far has run with `PIBOT_BATTERY_FLOOR=5.0` at the owner's
-  explicit instruction, which is a deliberate override of the safety gate and not a default.
-  - Check state, **with servo power already on** — the unloaded reading is about a volt
-    optimistic: `./venv/bin/python -c "from src.adc import ADC; print(ADC().read_battery_voltage())"`
-  - Blocks: a complete 360° turn (needs ~47 gait cycles, roughly double what has been run),
-    the full stance cycle without aborting, and any walking test.
+- [IN-FLIGHT 2026-08-18] **Verify closed-loop turning (`turn_to`) on hardware.** The code is
+  written and committed but has never driven a servo: the `hardware` node gained a `turn_to`
+  tool that calibrates the gyro-z bias standing still, integrates yaw in a 200Hz sampler
+  thread during the gait, and re-plans short walk(turn_*) segments from measured rotation
+  until within tolerance (default 5°), with battery re-reads between segments. Run
+  `PIBOT_TURN_CLOSED_LOOP=1 PIBOT_TURN_DEGREES=90 ./run.sh turn` first (a 90° turn is short
+  and easy to eyeball against a floor mark), then the full 360. Watch for: the gyro sign
+  convention (learned from the first segment — check the reported rotation sign matches
+  reality), and the measured deg/cycle the summary reports versus the 7.8 seed.
+
+- [IN-FLIGHT 2026-08-18] **Verify walking in named stances on hardware.** `./run.sh stancewalk`
+  walks forward then backward in narrow, neutral and wide. The offline frame-by-frame gait
+  simulation (`stances.validate_for_gait`) already rejects **narrow** for forward walking —
+  mid-gait reach 88.7mm undershoots the 90mm hard limit, so the node skips it and logs why;
+  seeing that skip line in a live run is part of the verification. Compare stability wide vs
+  neutral by eye. Needs floor space ahead of the robot.
 
 - [PINNED 2026-08-17] **Camera produces no frames on Ubuntu, but works on Raspberry Pi OS on this
   same board. The hardware is fine — do NOT RMA the Pi.** This replaces the previous entry, which
@@ -88,11 +95,6 @@ tells you something.
 
 Deliberately deferred. Review when Active clears.
 
-- [TODO 2026-08-16] **Decide where the stance work should live.** `nodes/stances.py` and the
-  `set_stance` tool are in this project, so abandoning the experiment loses them. They are
-  composition over the existing IK and would work equally well upstream, where both projects
-  would benefit. MASTERPLAN says engine improvements belong upstream; stances sit on the line.
-
 - [TODO 2026-08-16] **Measure the parallelism claim.** The central argument for the port is
   that audio, vision and the gait loop stop competing for one GIL. Nothing has measured it.
   Needs a working camera to be a fair test.
@@ -101,16 +103,6 @@ Deliberately deferred. Review when Active clears.
   are written to JPEG and passed by path, which wastes dora's zero-copy shared memory. This is
   where the architecture would start paying for itself, and it is the prerequisite for a local
   detector node. Blocked on the camera.
-
-- [TODO 2026-08-16] **Close the loop on turning using the IMU.** Rotation is currently
-  open-loop: a measured ~7.8°/gait cycle, multiplied out. The MPU6050 is already owned by the
-  `hardware` node and could report yaw, making `turn_to(degrees)` accurate and
-  surface-independent.
-
-- [TODO 2026-08-16] **Use stances in the gaits.** Foot spread now changes `body_points`, which
-  `run_gait` deep-copies, so a wide stance already widens the walking gait. Nothing exercises
-  that yet — walking in `brace` versus `narrow` is untested and is the obvious next movement
-  experiment.
 
 - [TODO 2026-08-16] **Restructure the brain as a behaviour tree (`py_trees`).** Carried over
   from upstream. The brain owns no hardware, so its logic can be replaced without touching any
