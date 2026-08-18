@@ -275,17 +275,27 @@ def validate_for_gait(
     return True, lo, hi, "ok"
 
 
-def verify_against(control) -> Tuple[bool, str]:
-    """Cross-check the mirrored geometry against a live Control instance."""
+def verify_against(control, expected: List[List[float]] = None) -> Tuple[bool, str]:
+    """Cross-check the mirrored geometry against a live Control instance.
+
+    `expected` is the footprint the caller last applied (None means the stock
+    BASE_FOOTPRINT). Comparing against the *applied* footprint matters: after
+    a spread stance, control.body_points legitimately holds the scaled values,
+    and comparing those against BASE_FOOTPRINT misreads a current stance as
+    drift — which is exactly how the first stancewalk run got stuck in `wide`
+    (2026-08-18).
+    """
+    reference = expected if expected is not None else BASE_FOOTPRINT
     try:
         live = [[p[0], p[1]] for p in control.body_points]
     except Exception as exc:
         return False, f"could not read control.body_points: {exc}"
-    for i, ((bx, by), (lx, ly)) in enumerate(zip(BASE_FOOTPRINT, live)):
+    for i, ((bx, by), (lx, ly)) in enumerate(zip(reference, live)):
         if abs(bx - lx) > 0.5 or abs(by - ly) > 0.5:
             return False, (
-                f"leg {i} footprint drifted: stances.py has ({bx}, {by}), "
-                f"control.py has ({lx}, {ly}). Update BASE_FOOTPRINT."
+                f"leg {i} footprint drifted: expected ({bx:.1f}, {by:.1f}), "
+                f"control.py has ({lx:.1f}, {ly:.1f}). Update BASE_FOOTPRINT "
+                f"if control.py's geometry changed."
             )
     return True, "geometry matches control.py"
 

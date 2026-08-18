@@ -156,6 +156,11 @@ class Hardware:
         self.last_battery: Optional[Tuple[float, float]] = None
         self.last_battery_at = 0.0
         self.blocked_reason: Optional[str] = None
+        # The footprint this node last applied via set_stance (None = stock).
+        # The geometry drift check compares against this, not the stock
+        # footprint, or every stance change away from a spread stance would
+        # misread the current stance as drift.
+        self.applied_footprint = None
 
         # ADC first and on its own: it is the one device we must be able to
         # read *before* deciding whether it is safe to energise the servos.
@@ -225,21 +230,28 @@ class Hardware:
     def gait_thread_alive(self) -> bool:
         return self.control is not None and self.control.condition_thread.is_alive()
 
-    def apply_stance(self, name: str) -> str:
-        """Move to a named stance, verifying it actually took effect."""
+    def apply_stance(self, name: str) -> Tuple[bool, str]:
+        """Move to a named stance, verifying it actually took effect.
+
+        Returns (ok, text) so the caller can set the refused flag on the tool
+        result — the first stancewalk run reported "8/8 steps ok" while a
+        stance had in fact been refused, because failure only lived in the
+        text.
+        """
         stance = stances.STANCES.get(str(name).strip().lower())
         if stance is None:
-            return f"Unknown stance {name!r}. Available: {', '.join(sorted(stances.STANCES))}"
+            return False, f"Unknown stance {name!r}. Available: {', '.join(sorted(stances.STANCES))}"
 
         ok, reaches, reason = stances.validate(stance)
         if not ok:
-            return f"Stance {stance.name!r} rejected: {reason}"
+            return False, f"Stance {stance.name!r} rejected: {reason}"
 
         # The geometry in stances.py is a mirror of control.py; make sure it has
-        # not drifted before trusting the reach check we just did.
-        matched, detail = stances.verify_against(self.control)
+        # not drifted before trusting the reach check we just did. Compare
+        # against whatever footprint we last applied, not the stock one.
+        matched, detail = stances.verify_against(self.control, self.applied_footprint)
         if not matched:
-            return f"Stance {stance.name!r} refused: {detail}"
+            return False, f"Stance {stance.name!r} refused: {detail}"
 
         control = self.control
         footprint = stance.footprint()
@@ -274,16 +286,17 @@ class Hardware:
             for i, (x, y) in enumerate(previous):
                 control.body_points[i][0] = x
                 control.body_points[i][1] = y
-            return (
+            return False, (
                 f"Stance {stance.name!r} FAILED: the robot reports its leg positions "
                 f"out of range, so nothing moved. Footprint reverted."
             )
 
+        self.applied_footprint = footprint
         actual = max(
             math.sqrt(p[0] ** 2 + p[1] ** 2 + p[2] ** 2) for p in control.leg_positions
         )
         note = "" if completed else " (timed out waiting for the gait thread)"
-        return (
+        return True, (
             f"Stance set to {stance.name!r}: {stance.description}. "
             f"spread={stance.spread:.2f} z={stance.z} roll={stance.roll} pitch={stance.pitch}, "
             f"max leg reach {actual:.0f}mm (predicted {max(reaches):.0f}mm){note}"
@@ -507,7 +520,10 @@ def main() -> None:
                 # since it manipulates Control.body_points directly.
                 if name == "set_stance":
                     refusal = hw.motion_refusal("stand", args)
-                    text = refusal if refusal is not None else hw.apply_stance(args.get("stance", ""))
+                    if refusal is not None:
+                        applied, text = False, refusal
+                    else:
+                        applied, text = hw.apply_stance(args.get("stance", ""))
                     node.send_output(
                         "tool_result",
                         encode(
@@ -515,7 +531,7 @@ def main() -> None:
                                 "id": call.get("id"),
                                 "name": name,
                                 "text": text,
-                                "refused": refusal is not None,
+                                "refused": not applied,
                             }
                         ),
                     )

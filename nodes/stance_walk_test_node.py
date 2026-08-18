@@ -156,7 +156,12 @@ def main() -> None:
             if payload.get("id") != pending:
                 continue
             text = str(payload.get("text") or "")
-            refused = bool(payload.get("refused")) or "FAILED" in text or "rejected" in text
+            refused = (
+                bool(payload.get("refused"))
+                or "FAILED" in text
+                or "rejected" in text
+                or "refused" in text
+            )
             logger.info(f"    {'FAILED' if refused else 'ok'}: {text}")
             results.append((steps[index][0], text, refused))
             if refused:
