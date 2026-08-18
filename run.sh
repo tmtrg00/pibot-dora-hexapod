@@ -26,6 +26,7 @@ case "${1:-full}" in
   camera)   DATAFLOW="dataflow-camera.yml" ;;
   stance)   DATAFLOW="dataflow-stance.yml" ;;
   stancewalk) DATAFLOW="dataflow-stancewalk.yml" ;;
+  crabwalk) DATAFLOW="dataflow-crabwalk.yml" ;;
   *)        DATAFLOW="$1" ;;
 esac
 

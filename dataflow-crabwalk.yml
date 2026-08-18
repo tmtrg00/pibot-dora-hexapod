@@ -1,0 +1,28 @@
+# Crab-walk graph. LOCOMOTION: walks sideways right then left back to the
+# start, optionally in a named stance. Lateral gait reach is pre-validated
+# offline per stance and direction before anything moves.
+#
+#   ./run.sh crabwalk
+#   PIBOT_CRABWALK_STANCE=wide PIBOT_CRABWALK_ROUNDS=2 ./run.sh crabwalk
+
+nodes:
+  - id: hardware
+    path: bin/py
+    args: nodes/hardware_node.py
+    inputs:
+      tick: dora/timer/millis/1000
+      tool_call: crab_walk/tool_call
+    outputs:
+      - battery
+      - health
+      - tool_result
+
+  - id: crab_walk
+    path: bin/py
+    args: nodes/crab_walk_test_node.py
+    inputs:
+      tick: dora/timer/millis/250
+      tool_result: hardware/tool_result
+      battery: hardware/battery
+    outputs:
+      - tool_call

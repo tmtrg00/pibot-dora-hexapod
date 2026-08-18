@@ -156,6 +156,7 @@ bin/py               Node launcher; forces the venv interpreter (RUNBOOKS §2)
 ./run.sh motion     # scripted pose sequence (moves legs, does not travel)
 ./run.sh turn       # rotate in place (LOCOMOTION — travels); PIBOT_TURN_CLOSED_LOOP=1 for gyro-closed turn_to
 ./run.sh stancewalk # walk forward/back in each stance (LOCOMOTION — travels)
+./run.sh crabwalk   # walk sideways right then left (LOCOMOTION — travels)
 ./run.sh camera     # capture attempts only
 ./run.sh            # full autonomous graph, the equivalent of the original main.py
 ./stop.sh           # kill all nodes, release I2C / GPIO / mic / servos

@@ -9,6 +9,13 @@ tells you something.
 
 ## Active
 
+- [IN-FLIGHT 2026-08-18] **Verify crab walking on hardware.** `./run.sh crabwalk` walks
+  sideways right then left back to the start (the gait engine's x=±35 stride — a true lateral
+  gait, not a turn), optionally in a stance via `PIBOT_CRABWALK_STANCE=wide`. Offline gait
+  validation passes every stance laterally except `narrow` (79.8mm min reach vs the 90mm hard
+  limit), which the node refuses to run. Code compiled and committed, never driven a servo.
+  Needs clear floor to the robot's left and right.
+
 - [PINNED 2026-08-17] **Camera produces no frames on Ubuntu, but works on Raspberry Pi OS on this
   same board. The hardware is fine — do NOT RMA the Pi.** This replaces the previous entry, which
   said the RP1 receiver was defective; see CHANGELOG 2026-08-17 for why that was wrong. The
