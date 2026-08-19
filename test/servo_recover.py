@@ -23,10 +23,24 @@ each joint gets a small sweep and you say whether it moved.
 
 Usage, from the project root:
 
-    ./bin/py test/servo_recover.py             # check, then stand
-    ./bin/py test/servo_recover.py --rest      # skip the check, just stand
+    ./bin/py test/servo_recover.py             # check every joint, then reference pose
+    ./bin/py test/servo_recover.py --rest      # skip the check, go to reference pose
+    ./bin/py test/servo_recover.py --stand     # reference pose -> standing on its feet
     ./bin/py test/servo_recover.py --leg 3     # check one leg only
     ./bin/py test/servo_recover.py --relax     # torque off and exit
+
+Two different poses, and the difference matters:
+
+  REFERENCE POSE  every leg straight out sideways — the "starfish". Coxa and
+                  femur at 90deg, right tibias at 10deg, left at 170deg. This
+                  is the pose servo horns are installed against, so it is the
+                  one to check alignment in: every leg should mirror its
+                  opposite number exactly. The robot CANNOT stand in it.
+
+  STANDING POSE   what the robot actually stands in, computed by the inverse
+                  kinematics from the resting footprint. `--stand` eases from
+                  the reference pose into it, so put the robot down on the
+                  floor first.
 """
 import argparse
 import os
@@ -85,9 +99,75 @@ def ask(question):
         raise
 
 
+def standing_angles(servo):
+    """Servo angles for the standing pose, WITHOUT moving anything.
+
+    Runs the robot's own inverse kinematics rather than a second copy of it:
+    build a Control shell with the fields set_leg_angles() reads, point it at
+    the resting footprint, and capture the angles it would write by swapping
+    the servo out for a recorder. Anything else would be a reimplementation of
+    the IK, which is the one piece of this codebase that must not be duplicated.
+    """
+    from src.control import Control
+
+    c = Control.__new__(Control)          # no __init__: __init__ drives the legs
+    c.servo = servo
+    c.body_height = -30
+    c.body_points = [[137.1, 189.4, -30], [225, 0, -30], [137.1, -189.4, -30],
+                     [-137.1, -189.4, -30], [-225, 0, -30], [-137.1, 189.4, -30]]
+    c.calibration_leg_positions = c.read_from_txt("point")
+    c.leg_positions = [[140, 0, 0] for _ in range(6)]
+    c.calibration_angles = [[0, 0, 0] for _ in range(6)]
+    c.current_angles = [[90, 0, 0] for _ in range(6)]
+    c.last_foot_z = [-30] * 6
+    c.calibrate()
+
+    # move_position(0, 0, 0): feet on the resting footprint at ride height.
+    points = [list(p) for p in c.body_points]
+    for i in range(6):
+        points[i][2] = -30
+    c.transform_coordinates(points)
+
+    if not c.check_point_validity():
+        return None
+
+    captured = {}
+
+    class Recorder:
+        def set_servo_angle(self, channel, angle):
+            captured[channel] = angle
+
+    real, c.servo = c.servo, Recorder()
+    try:
+        c.set_leg_angles()
+    finally:
+        c.servo = real
+    return captured
+
+
+def go_standing(servo, seconds=2.5, steps=60):
+    """Ease from the reference pose into the standing pose."""
+    targets = standing_angles(servo)
+    if targets is None:
+        print("  REFUSED: the standing pose reports its legs out of reach.")
+        return False
+    start = {ch: reference_angle(ch) for ch in targets}
+    print(f"  easing {len(targets)} joints from the reference pose into standing "
+          f"over {seconds:.1f}s")
+    for i in range(1, steps + 1):
+        f = i / steps
+        for ch, target in targets.items():
+            servo.set_servo_angle(ch, start[ch] + (target - start[ch]) * f)
+        time.sleep(seconds / steps)
+    return True
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--rest", action="store_true", help="skip the joint test, just stand")
+    ap.add_argument("--rest", action="store_true",
+                    help="skip the joint test, go to the reference pose")
+    ap.add_argument("--stand", action="store_true",
+                    help="ease from the reference pose into the standing pose")
     ap.add_argument("--relax", action="store_true", help="torque off and exit")
     ap.add_argument("--leg", type=int, default=0, help="check one leg (1-6) only")
     ap.add_argument("--sweep", type=int, default=25, help="sweep size in degrees")
@@ -157,7 +237,32 @@ def main():
         except (KeyboardInterrupt, EOFError):
             print("\n  joint check interrupted")
 
-    print("\n=== 4. rest stance ===")
+    if args.stand:
+        print("\n=== 4. standing pose ===")
+        print("  Put the robot on the FLOOR now — it is about to take its own weight.")
+        try:
+            input("  Press Enter when it is down and clear...")
+        except (KeyboardInterrupt, EOFError):
+            print()
+        # Reach the reference pose first, so the ease starts from a known place.
+        for name, coxa, femur, tibia, _ in LEGS:
+            for ch in (coxa, femur, tibia):
+                servo.set_servo_angle(ch, reference_angle(ch))
+        time.sleep(1.0)
+        if go_standing(servo):
+            print("  Standing. It should be on its feet, body level, legs even.")
+        print("\n  Leaving the servos holding the pose.")
+        try:
+            input("  Press Enter to relax and finish...")
+        except (KeyboardInterrupt, EOFError):
+            print()
+        servo.relax()
+        servo.servo_power.on()
+        adc.close_i2c()
+        print("  Servos relaxed, rail off.\n")
+        return 0
+
+    print("\n=== 4. reference pose ===")
     print("  Driving every joint to its reference angle, gradually.")
     for name, coxa, femur, tibia, _ in LEGS:
         for ch in (coxa, femur, tibia):

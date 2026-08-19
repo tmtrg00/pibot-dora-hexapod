@@ -211,11 +211,22 @@ below the floor, relaxes first so leads can be re-seated by hand, and moves a si
 a time so a dead one can be identified by watching:
 
 ```bash
-./bin/py test/servo_recover.py          # check every joint, then rest pose
+./bin/py test/servo_recover.py          # check every joint, then reference pose
 ./bin/py test/servo_recover.py --leg 3  # one leg only
-./bin/py test/servo_recover.py --rest   # skip the check, just go to rest pose
+./bin/py test/servo_recover.py --rest   # skip the check, go to reference pose
+./bin/py test/servo_recover.py --stand  # reference pose -> standing on its feet
 ./bin/py test/servo_recover.py --relax  # torque off and exit
 ```
+
+Two poses, and confusing them wastes time:
+
+**Reference pose** — the "starfish", every leg straight out sideways. Coxa and femur at 90deg,
+right tibias 10deg, left 170deg. This is what servo horns are installed against, so it is the
+pose to check alignment in. The robot cannot stand in it.
+
+**Standing pose** — what it actually stands in, from the inverse kinematics. `--stand` eases
+into it from the reference pose, moving the tibias about 100deg, so put the robot on the floor
+first.
 
 **Stand the robot on a box so its legs hang free before running it.** Legs that are out of
 sync can tip it over on the first move.
