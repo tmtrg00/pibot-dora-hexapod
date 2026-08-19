@@ -119,6 +119,19 @@ driver, vendor libcamera, the DTB and the CSI IOMMU binding are all eliminated a
 (CHANGELOG 2026-08-17). None of that work is wasted — it bounds where the next camera has to
 behave differently.
 
+**Diagnostic pointer if the replacement camera also fails.** A separate branch
+(`tmtrg/pi-os-camera-issue`, since discarded) tested Raspberry Pi OS 64 Lite properly and reached
+a sharper reading of the same "fails on both OSes" fact: a Pi OS retest runs the *vendor's own*
+streaming-start sequence, validated daily on millions of boards, and it produces the same
+silence — zero packets, zero errors, and a zero-byte capture from the IMX708's on-chip colour-bar
+generator. That supplies the premise the zero-counter evidence was always missing: with
+known-good software commanding the sensor, "nothing arrives at the receiver" can no longer be
+explained by a transmitter that was never started, which points the fault at the Pi 5's **RP1
+CSI-2 receive path** — the one part shared across every eliminated sensor, cable and port. We are
+**not** acting on that now (the plan is a different camera, not a board RMA), but if the new
+camera also captures nothing on this board, the RP1 receive path is the first thing to suspect,
+and the identical failure on the vendor OS is the warranty evidence.
+
 **Impact — still blocked, now deferred rather than active:** vision-guided obstacle avoidance,
 the autonomous observation loop, streaming camera frames as Arrow buffers, and the
 responsiveness comparison that MASTERPLAN makes the definition of success all remain blocked,
