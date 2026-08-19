@@ -38,6 +38,10 @@ case "${1:-full}" in
   crabwalk) DATAFLOW="dataflow-crabwalk.yml" ;;
   straightwalk) DATAFLOW="dataflow-straightwalk.yml" ;;
   odometry) DATAFLOW="dataflow-odometry.yml" ;;
+  idlereset) DATAFLOW="dataflow-idlereset.yml" ;;
+  smoothturn) DATAFLOW="dataflow-smoothturn.yml" ;;
+  approach) DATAFLOW="dataflow-approach.yml" ;;
+  attitude) DATAFLOW="dataflow-attitude.yml" ;;
   *)        DATAFLOW="$1" ;;
 esac
 

@@ -311,6 +311,14 @@ def _relax_servo_channel(servo: Any, channel: int) -> None:
         servo.pwm_41.set_pwm(channel, 4096, 4096)
     else:
         servo.pwm_40.set_pwm(channel - 16, 4096, 4096)
+    # This wrote the channel behind set_servo_angle's back, so its cached idea
+    # of what the channel holds is now wrong. Without this the next move_head
+    # to the same angle would be skipped as redundant and the head would stay
+    # limp.
+    try:
+        servo.invalidate(channel)
+    except AttributeError:
+        pass
 
 
 def _release_head_after_delay(servo: Any, delay_s: float, token: int, hardware: Dict[str, Any]) -> None:
@@ -416,39 +424,26 @@ def execute(name: str, args: Dict[str, Any], hardware: Dict[str, Any]) -> Option
             budget = max(3.0, _estimated_cycle_duration(gait, speed) * 3 + 2.0)
             before = _cycles_run(control)
 
-            if x == 0 and y == 0:
-                # A turn is single-shot in condition_monitor: it runs one cycle
-                # and then clears the queue, so each cycle has to be re-queued.
-                # Waiting on the queue clearing rather than on the cycle counter
-                # matters here — the counter is incremented *before* the queue is
-                # cleared, so re-queueing the moment it ticks would hand
-                # condition_monitor a fresh command that it then wipes.
-                queued = 0
-                while queued < steps:
-                    at_queue_time = _cycles_run(control)
-                    _queue_command(control, move)
-                    if not _wait_for_clear(control, timeout_s=budget):
-                        break
-                    if _cycles_run(control) == at_queue_time:
-                        break  # the queue cleared without a cycle actually running
-                    queued += 1
-            else:
-                # A stride keeps the queue, so run_gait re-enters itself and
-                # all this has to do is count cycles off until it has enough.
-                # It waits for one *fewer* than asked: run_gait only re-reads
-                # the queue between cycles, so the stop has to be queued while
-                # the final cycle is still running. Queueing it after the Nth
-                # completed would let an N+1th start, overshooting by a stride.
-                _queue_command(control, move)
-                # Let condition_monitor pick the command up before a
-                # steps=1 walk can stop it again.
-                time.sleep(0.15)
-                _wait_for_cycles(
-                    control,
-                    max(0, steps - 1),
-                    budget * steps,
-                    fallback_s=_estimated_cycle_duration(gait, speed) * steps,
-                )
+            # Any command that moves the robot — stride or turn — stays queued,
+            # so run_gait re-enters itself and all this has to do is count
+            # cycles off until it has enough. Turns used to need a separate
+            # re-queue-per-cycle path because condition_monitor treated them as
+            # single-shot; they no longer do.
+            #
+            # It waits for one *fewer* cycle than asked: run_gait only re-reads
+            # the queue between cycles, so the stop has to be queued while the
+            # final cycle is still running. Queueing it after the Nth completed
+            # would let an N+1th start, overshooting by a whole cycle.
+            _queue_command(control, move)
+            # Let condition_monitor pick the command up before a steps=1 walk
+            # can stop it again.
+            time.sleep(0.15)
+            _wait_for_cycles(
+                control,
+                max(0, steps - 1),
+                budget * steps,
+                fallback_s=_estimated_cycle_duration(gait, speed) * steps,
+            )
 
             _queue_command(control, [cmd.CMD_MOVE, str(gait), "0", "0", str(speed), "0"])
             _wait_for_clear(control)

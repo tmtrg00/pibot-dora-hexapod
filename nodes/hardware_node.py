@@ -72,12 +72,12 @@ BATTERY_MAX_AGE_S = 10.0
 # the graph be exercised on a bench with nothing able to move.
 NO_MOTION = os.environ.get("PIBOT_NO_MOTION", "").lower() in {"1", "true", "yes"}
 
-# Closed-loop turning. One turn gait cycle at angle=8 rotated the body ~36deg
-# (observed 2026-08-18 — the 2026-08-16 "7.8deg/cycle" was per *commanded*
-# cycle, but turn commands are single-shot in condition_monitor, so 23
-# commanded cycles were ~5 real ones). ~4.5deg per angle unit seeds the
-# planner; each cycle's measured rotation then refines it.
-TURN_SEED_DEG_PER_ANGLE_UNIT = 4.5
+# Closed-loop turning: degrees the body rotates per angle unit per gait cycle.
+# Only a seed — the turn measures the real figure as it goes and converges on
+# it. 4.5 came from a single 2026-08-18 cycle at angle=8; two turn_to runs on
+# 2026-08-19 measured 3.2 and 3.3, so the seed was consistently over-predicting
+# each cycle by about a third and every turn undershot its target.
+TURN_SEED_DEG_PER_ANGLE_UNIT = 3.3
 TURN_TOLERANCE_DEG = 5.0
 TURN_SPEED = int(os.environ.get("PIBOT_TURN_SPEED", "6"))
 
@@ -103,6 +103,20 @@ SIGN_PROBE_TIMEOUT_S = 6.0
 # long walk never goes silent.
 HEARTBEAT_S = 3.0
 
+# Return to the neutral stance after this many seconds with nothing moving.
+# A stance is adopted for a movement; when the movement is over the robot
+# should stand normally again rather than stay crouched or splayed. 0 disables.
+IDLE_STANCE_RESET_S = float(os.environ.get("PIBOT_IDLE_STANCE_RESET_S", "20"))
+
+# How many intermediate poses a stance change is split into, and how long to
+# settle between them. One step is the old behaviour: the body drops or the
+# feet snap outward as fast as the servos can slew. Four is enough to read as a
+# movement rather than a jolt without making a stance change feel slow.
+STANCE_RAMP_STEPS = max(1, min(12, int(os.environ.get("PIBOT_STANCE_RAMP_STEPS", "4"))))
+STANCE_RAMP_PAUSE_S = max(
+    0.0, min(1.0, float(os.environ.get("PIBOT_STANCE_RAMP_PAUSE_S", "0.12")))
+)
+
 
 def cycle_duration_estimate(gait: int, speed: int) -> float:
     """How long one gait cycle is expected to take, in seconds.
@@ -120,6 +134,98 @@ def cycle_duration_estimate(gait: int, speed: int) -> float:
     return max(0.2, (frames * 0.01) + 0.05)
 
 
+# Closed-loop approach. The HC-SR04 is noisy and occasionally returns a wild
+# value, so readings are median-filtered over this many samples before the stop
+# decision reads them; and a reading older than the staleness bound means the
+# distance sensor has stopped answering, which must stop the robot rather than
+# let it walk on blind.
+APPROACH_MEDIAN_SAMPLES = 3
+APPROACH_STALE_S = 2.0
+APPROACH_MIN_CM = 2.0
+APPROACH_MAX_CM = 400.0
+
+
+class Approach:
+    """State for one closed-loop approach, driven by the node's event loop.
+
+    Why this is a state machine rather than a blocking loop like `turn_to`:
+    the gait runs on `Control.condition_monitor`, a thread of its own, so once
+    a walk command is queued the robot keeps walking without this node's
+    attention. Blocking here to drive it would therefore be worse than
+    pointless — it would stop the node receiving the very `distance` messages
+    the approach is closing the loop on, since those arrive from another
+    process as dora events. Handing control back to the event loop between
+    readings is what lets the robot walk continuously *and* watch where it is
+    going.
+    """
+
+    __slots__ = (
+        "call_id", "stop_cm", "speed", "direction", "max_cycles", "started_cycles",
+        "started_at", "samples", "last_at", "last_cm", "closing_rate", "tracker",
+        "controller", "yaw_sign", "applied", "corrections", "worst_cm", "lead_cm",
+        "walking", "last_steer_at", "last_battery_at",
+    )
+
+    def __init__(self, call_id, stop_cm, speed, direction, max_cycles,
+                 started_cycles, tracker, controller, yaw_sign):
+        self.call_id = call_id
+        self.stop_cm = stop_cm
+        self.speed = speed
+        self.direction = direction
+        self.max_cycles = max_cycles
+        self.started_cycles = started_cycles
+        self.started_at = time.monotonic()
+        self.samples = []
+        self.last_at = 0.0
+        self.last_cm = None
+        self.closing_rate = 0.0
+        self.tracker = tracker
+        self.controller = controller
+        self.yaw_sign = yaw_sign
+        self.applied = 0
+        self.corrections = 0
+        self.worst_cm = None
+        self.lead_cm = 0.0
+        # Nothing moves until a distance reading has arrived. Walking first and
+        # looking afterwards would mean the robot advances blind for at least
+        # one gait cycle, which is exactly the cycle it cannot take back.
+        self.walking = False
+        self.last_steer_at = time.monotonic()
+        self.last_battery_at = 0.0
+
+    def satisfied(self, predicted_cm: float) -> bool:
+        """Has the target been reached, in whichever direction is being asked?
+
+        Approaching, the distance falls and the goal is to get below the
+        target. Retreating, it rises and the goal is to get above it. The same
+        comparison cannot serve both — using the approach test for a retreat
+        made every retreat stop instantly, since the robot starts closer than
+        the gap it was asked to open.
+        """
+        if self.direction == "forward":
+            return predicted_cm <= self.stop_cm
+        return predicted_cm >= self.stop_cm
+
+    def add_reading(self, cm: float) -> Optional[float]:
+        """Median-filter a reading. Returns the filtered distance, or None."""
+        if not (APPROACH_MIN_CM <= cm <= APPROACH_MAX_CM):
+            return None
+        now = time.monotonic()
+        self.samples.append(cm)
+        if len(self.samples) > APPROACH_MEDIAN_SAMPLES:
+            self.samples.pop(0)
+        filtered = sorted(self.samples)[len(self.samples) // 2]
+
+        if self.last_cm is not None and now > self.last_at:
+            # Positive when closing on the obstacle.
+            rate = (self.last_cm - filtered) / (now - self.last_at)
+            self.closing_rate = 0.6 * self.closing_rate + 0.4 * rate
+        self.last_cm, self.last_at = filtered, now
+        if self.worst_cm is None or filtered < self.worst_cm:
+            self.worst_cm = filtered
+        return filtered
+
+
 class Hardware:
     def __init__(self) -> None:
         self.adc: Optional[ADC] = None
@@ -132,6 +238,22 @@ class Hardware:
         # footprint, or every stance change away from a spread stance would
         # misread the current stance as drift.
         self.applied_footprint = None
+        # Which named stance the robot is currently standing in, and when it
+        # last did anything. Together these drive the idle stance reset: a
+        # stance is a pose for a purpose, and once the purpose is over the
+        # robot should not be left crouched or splayed indefinitely.
+        self.applied_stance = "neutral"
+        # The height and tilt currently held, so a stance change can be ramped
+        # *from* where the robot actually is rather than from an assumed zero.
+        self.applied_z = 0
+        self.applied_roll = 0
+        self.applied_pitch = 0
+        self.last_motion_at = time.time()
+        self.relaxed = False
+        # The closed-loop approach in flight, if any. Held as state rather than
+        # run as a blocking loop so the node keeps receiving distance messages
+        # while the robot walks — see the Approach docstring.
+        self.approach: Optional[Approach] = None
 
         # ADC first and on its own: it is the one device we must be able to
         # read *before* deciding whether it is safe to energise the servos.
@@ -228,12 +350,6 @@ class Hardware:
         footprint = stance.footprint()
         previous = [[p[0], p[1]] for p in control.body_points]
 
-        # Widen or narrow the resting footprint. run_gait deep-copies
-        # body_points, so this changes the walking gait too.
-        for i, (x, y) in enumerate(footprint):
-            control.body_points[i][0] = x
-            control.body_points[i][1] = y
-
         def queue(parts, timeout_s=15.0):
             control.command_queue = parts
             control.timeout = time.time()
@@ -245,9 +361,61 @@ class Hardware:
                 time.sleep(0.05)
             return False
 
-        completed = queue([cmd.CMD_POSITION, "0", "0", str(stance.z)])
-        if stance.roll or stance.pitch:
-            completed = queue([cmd.CMD_ATTITUDE, str(stance.roll), str(stance.pitch), "0"]) and completed
+        # Ramp into the stance instead of jumping to it.
+        #
+        # A stance change is a single `set_leg_angles()` away, and taken in one
+        # step that is exactly what it looks like: the body drops or the feet
+        # snap outward as fast as eighteen servos can slew, which lurches the
+        # robot and can skid the planted feet. Nothing about the pose requires
+        # that — the intermediate poses between two valid stances are
+        # themselves valid — so the transition is split into several smaller
+        # moves. The robot arrives in the same place, having got there as a
+        # movement rather than a jolt.
+        #
+        # Each intermediate footprint and height is reach-checked before it is
+        # applied, because interpolating between two reachable poses does not
+        # by itself guarantee the path between them stays inside the 90..248mm
+        # window, and `set_leg_angles()` fails silently when it does not.
+        start_footprint = [[p[0], p[1]] for p in previous]
+        start_z, start_roll, start_pitch = self.applied_z, self.applied_roll, self.applied_pitch
+        completed = True
+        for step in range(1, STANCE_RAMP_STEPS + 1):
+            t = step / STANCE_RAMP_STEPS
+            partial = [
+                [sx + (tx - sx) * t, sy + (ty - sy) * t]
+                for (sx, sy), (tx, ty) in zip(start_footprint, footprint)
+            ]
+            z = int(round(start_z + (stance.z - start_z) * t))
+            roll = int(round(start_roll + (stance.roll - start_roll) * t))
+            pitch = int(round(start_pitch + (stance.pitch - start_pitch) * t))
+
+            reaches = stances.leg_reach(partial, z)
+            low = stances.MIN_REACH_MM + stances.REACH_MARGIN_MM
+            high = stances.MAX_REACH_MM - stances.REACH_MARGIN_MM
+            if min(reaches) < low or max(reaches) > high:
+                for i, (x, y) in enumerate(previous):
+                    control.body_points[i][0] = x
+                    control.body_points[i][1] = y
+                return False, (
+                    f"Stance {stance.name!r} refused: step {step}/{STANCE_RAMP_STEPS} of "
+                    f"the transition would need a leg reach of "
+                    f"{min(reaches):.1f}..{max(reaches):.1f}mm, outside the usable "
+                    f"{low:.0f}..{high:.0f}mm. Footprint reverted."
+                )
+
+            # Widen or narrow the resting footprint. run_gait deep-copies
+            # body_points, so this changes the walking gait too.
+            for i, (x, y) in enumerate(partial):
+                control.body_points[i][0] = x
+                control.body_points[i][1] = y
+
+            completed = queue([cmd.CMD_POSITION, "0", "0", str(z)]) and completed
+            if roll or pitch or start_roll or start_pitch:
+                completed = queue(
+                    [cmd.CMD_ATTITUDE, str(roll), str(pitch), "0"]
+                ) and completed
+            if step < STANCE_RAMP_STEPS and STANCE_RAMP_PAUSE_S:
+                time.sleep(STANCE_RAMP_PAUSE_S)
 
         # set_leg_angles() silently declines to move if a leg is out of range,
         # so confirm against the robot's own validity check rather than
@@ -263,6 +431,10 @@ class Hardware:
             )
 
         self.applied_footprint = footprint
+        self.applied_stance = stance.name
+        self.applied_z = stance.z
+        self.applied_roll = stance.roll
+        self.applied_pitch = stance.pitch
         actual = max(
             math.sqrt(p[0] ** 2 + p[1] ** 2 + p[2] ** 2) for p in control.leg_positions
         )
@@ -270,23 +442,40 @@ class Hardware:
         return True, (
             f"Stance set to {stance.name!r}: {stance.description}. "
             f"spread={stance.spread:.2f} z={stance.z} roll={stance.roll} pitch={stance.pitch}, "
-            f"max leg reach {actual:.0f}mm (predicted {max(reaches):.0f}mm){note}"
+            f"max leg reach {actual:.0f}mm (predicted {max(reaches):.0f}mm), "
+            f"ramped in {STANCE_RAMP_STEPS} step(s){note}"
         )
 
     def turn_to(self, degrees, tolerance=None) -> str:
         """Rotate in place by `degrees`, closed-loop on the z gyro.
 
-        Runs single turn gait cycles with the angle scaled to the remaining
-        error and re-plans from the measured rotation after each one, so gait
-        slip, surface and battery state stop mattering: the loop keeps
-        stepping (in either direction) until the integrated yaw is within
-        tolerance of the target. Positive degrees is turn_right, negative
-        turn_left; the gyro's sign convention is not assumed — it is learned
-        from the first cycle.
+        The turn runs as ONE continuous gait command whose steering angle is
+        re-trimmed as the robot rotates, rather than as a sequence of separate
+        single-cycle commands. That is what makes it smooth: the earlier
+        version queued one cycle, waited for the gait thread to clear the
+        queue, paused 0.4s to let the body settle, measured, re-planned, and
+        only then queued the next one — so the robot turned in visible discrete
+        lurches (owner observation, 2026-08-19). It could not simply be made
+        continuous at the time, because `condition_monitor` treated any command
+        without a stride as single-shot; that has since been narrowed to the
+        genuine stop-and-stand command, so a turn now stays queued and
+        `run_gait` re-enters it cycle after cycle.
+
+        Closed-loop behaviour is unchanged in substance: the commanded angle is
+        scaled to the rotation still to go, so gait slip, surface and battery
+        state stop mattering, and an overshoot is corrected by the angle simply
+        changing sign. Positive degrees is right, negative is left.
+
+        Landing accuracy comes from that scaling rather than from stopping at
+        exactly the right instant, which is not possible: `run_gait` only reads
+        the queue between cycles, so a stop always takes effect at a cycle
+        boundary. Because the angle shrinks as the target nears, the final
+        cycle is a small one — angle 1 is about 3deg — and the unavoidable
+        overshoot is smaller than the tolerance.
 
         Blocks this node's event loop for the whole turn, exactly as a long
-        `walk` already does; the battery is re-read between segments here
-        rather than waiting on tick telemetry.
+        `walk` already does; the battery is re-read as it goes rather than
+        waiting on tick telemetry.
         """
         try:
             target = float(degrees)
@@ -300,133 +489,224 @@ class Hardware:
         tol = max(2.0, min(45.0, tol))
 
         if abs(target) <= tol:
-            return f"turn_to: target {target:.1f}deg is already within the {tol:.1f}deg tolerance, not moving"
+            return (
+                f"turn_to: target {target:.1f}deg is already within the "
+                f"{tol:.1f}deg tolerance, not moving"
+            )
+
+        control = self.control
+        cycle_s = cycle_duration_estimate(1, TURN_SPEED)
 
         # Stand first: bias calibration needs a motionless robot, and a turn
         # started from a slumped pose drags feet.
         logger.info(f"turn_to: target {target:+.1f}deg, tolerance {tol:.1f}deg — standing")
         run_action("stand", {}, self.hardware_dict)
 
-        tracker = YawTracker(self.control.imu.sensor)
+        tracker = YawTracker(control.imu.sensor)
         bias, spread = tracker.calibrate(1.0)
-        still = spread <= 8.0
-        note = "" if still else f" (gyro spread {spread:.1f}deg/s during calibration — robot was not still)"
-        logger.info(f"turn_to: gyro bias {bias:+.2f}deg/s, spread {spread:.2f}deg/s")
+        note = (
+            "" if spread <= 8.0
+            else f" (gyro spread {spread:.1f}deg/s during calibration — robot was not still)"
+        )
 
-        # A turn command (x=0, y=0) is SINGLE-SHOT in condition_monitor: one
-        # run_gait cycle, queue cleared — walk()'s `steps` argument does not
-        # multiply it. Measured 2026-08-18: at angle=8 one cycle rotates ~36deg,
-        # so going through walk() gives a 36deg quantum that can never settle
-        # into a small tolerance (the robot oscillates across the target
-        # forever). Instead each step here queues CMD_MOVE directly with an
-        # angle scaled to the remaining error: angle 1..8 spans roughly
-        # 4.5..36deg per cycle, which is fine enough to land inside tolerance.
+        yaw_sign = load_yaw_sign()
         per_unit = TURN_SEED_DEG_PER_ANGLE_UNIT
-        sense = 0.0  # +1/-1 once the first step reveals the gyro's sign for a right turn
-        max_steps = int(math.ceil(abs(target) / TURN_SEED_DEG_PER_ANGLE_UNIT)) + 12
-        steps_done = 0
-        weak_steps = 0
-        outcome = "reached tolerance"
+        logger.info(
+            f"turn_to: gyro bias {bias:+.2f}deg/s, spread {spread:.2f}deg/s, "
+            f"sign {'unknown — will learn' if yaw_sign is None else f'{yaw_sign:+.0f}'}"
+        )
 
-        def one_cycle(angle: int) -> bool:
-            """Queue a single turn gait cycle and wait for it to complete."""
-            control = self.control
-            control.command_queue = [cmd.CMD_MOVE, "1", "0", "0", str(TURN_SPEED), str(angle)]
+        def queue(angle: int) -> None:
+            control.command_queue = [
+                cmd.CMD_MOVE, "1", "0", "0", str(TURN_SPEED), str(angle)
+            ]
+            control.timeout = time.time()
+
+        def plan(remaining: float) -> int:
+            """Steering angle for the rotation still to go, signed."""
+            magnitude = max(1, min(8, int(round(abs(remaining) / max(per_unit, 0.5)))))
+            return magnitude if remaining > 0 else -magnitude
+
+        # Planning happens at CYCLE BOUNDARIES and predicts one cycle ahead,
+        # which is the only way to land accurately on a gait that cannot be
+        # interrupted. `run_gait` reads the queue once, when a cycle begins, so
+        # by the time this loop notices a cycle has ended the next one is
+        # already turning with whatever angle was queued before. Planning from
+        # the heading right now would therefore always be one cycle late — that
+        # cost a 15.6deg overshoot on a 90deg target in simulation, because the
+        # angle was still at maximum when the target was 10deg away.
+        #
+        # So each boundary decides the angle for the cycle AFTER the one just
+        # started, using the heading that in-flight cycle is predicted to end
+        # at. The invariant that makes this work: `applied` is always the angle
+        # of the currently running cycle, because every change is queued a full
+        # cycle before it takes effect.
+        deadline = time.monotonic() + abs(target) / max(per_unit, 1.0) * cycle_s * 4 + 30.0
+        applied = plan(target)
+        angle_running = applied
+        outcome = "reached tolerance"
+        turned_right = 0.0
+        boundary_turned = 0.0
+        cycles_seen = control.gait_cycles
+        last_battery_check = time.time()
+        last_heartbeat = time.monotonic()
+        stalled_cycles = 0
+        units_commanded = 0
+
+        tracker.start()
+        queue(applied)
+        try:
+            while True:
+                time.sleep(STEER_INTERVAL_S)
+                now = time.monotonic()
+                raw_yaw = tracker.yaw()
+
+                if yaw_sign is None:
+                    # Never measured on this robot. The command is already
+                    # turning toward the target, so whichever way yaw moves is
+                    # by definition the direction the commanded sign produces.
+                    if abs(raw_yaw) < SIGN_PROBE_MIN_DEG:
+                        if now > deadline:
+                            outcome = "aborted: the gyro never moved, cannot turn closed-loop"
+                            break
+                        continue
+                    yaw_sign = (1.0 if raw_yaw > 0 else -1.0) * (1.0 if applied > 0 else -1.0)
+                    save_yaw_sign(yaw_sign, "turn_to")
+                    logger.info(
+                        f"turn_to: learned gyro yaw sign {yaw_sign:+.0f} "
+                        f"(positive yaw = turning right) and saved it"
+                    )
+
+                turned_right = raw_yaw * yaw_sign
+                remaining = target - turned_right
+
+                # Where the cycle now running will leave us. It cannot be
+                # interrupted, so this — not the heading right now — is what
+                # decides whether to stop. `angle_running` rather than
+                # `applied`: a new angle is queued a cycle before it takes
+                # effect, so the two differ for most of every cycle.
+                delivered = turned_right - boundary_turned
+                outstanding = angle_running * per_unit - delivered
+                still_coming = (
+                    max(0.0, outstanding) if angle_running > 0 else min(0.0, outstanding)
+                )
+                predicted_end = turned_right + still_coming
+                error_if_stopped = abs(target - predicted_end)
+                if error_if_stopped <= tol:
+                    # Stopping is allowed — but only take it if it is at least
+                    # as good as running one more cycle. Stopping at the first
+                    # merely-acceptable moment made turns finish early and
+                    # wide: a 90deg turn halted with the in-flight cycle
+                    # predicted 4.8deg short, when the cycle already planned
+                    # would have landed 1.2deg short. "Within tolerance" is the
+                    # contract, not the goal.
+                    next_angle = plan(target - predicted_end)
+                    error_if_continued = abs(
+                        target - (predicted_end + next_angle * per_unit)
+                    )
+                    if error_if_stopped <= error_if_continued:
+                        # run_gait reads the queue when a cycle begins, so the
+                        # stop lands exactly at the end of the one in flight.
+                        logger.info(
+                            f"turn_to: stopping — the cycle in flight lands "
+                            f"{target - predicted_end:+.1f}deg from target, and another "
+                            f"cycle would only make it {error_if_continued:.1f}deg"
+                        )
+                        break
+
+                if now > deadline:
+                    outcome = f"stopped on a timeout with {remaining:+.1f}deg still to go"
+                    break
+
+                if time.time() - last_battery_check > 2.0:
+                    last_battery_check = time.time()
+                    self.read_battery(force=True)
+                    refusal = self.motion_refusal("walk", {})
+                    if refusal is not None:
+                        outcome = f"aborted: {refusal}"
+                        break
+
+                cycles_now = control.gait_cycles
+                if cycles_now == cycles_seen:
+                    if now - last_heartbeat > HEARTBEAT_S:
+                        last_heartbeat = now
+                        logger.info(
+                            f"turn_to: {remaining:+.1f}deg to go, turning at {applied:+d}"
+                        )
+                    continue
+
+                # --- a cycle just ended, the next has just begun -------------
+                cycles_seen = cycles_now
+                moved = turned_right - boundary_turned
+                boundary_turned = turned_right
+
+                # Learn the real rotation per angle unit from the cycle that
+                # just finished, so the plan converges on this robot, this
+                # surface and this battery rather than on a seeded constant.
+                # Estimate the rotation per angle unit over the WHOLE turn so
+                # far, not from the cycle that just ended. A per-cycle figure
+                # is noisy: this loop only notices a boundary at its next
+                # sample, up to a sampling interval late, so each cycle's
+                # measured rotation carries that jitter — enough to read 3.6
+                # on a robot really doing 3.3, which is plenty to misplace the
+                # stop. Dividing total rotation by total angle units commanded
+                # averages the jitter out and converges within a cycle or two.
+                # It is also signed throughout, so a correction that reverses
+                # direction subtracts correctly instead of inflating the total.
+                units_commanded += angle_running
+                if abs(units_commanded) >= 1:
+                    estimate = turned_right / units_commanded
+                    if 1.0 <= estimate <= 12.0:
+                        per_unit = estimate
+
+                if abs(moved) < 1.0:
+                    stalled_cycles += 1
+                    if stalled_cycles >= 2:
+                        outcome = (
+                            f"aborted: two consecutive cycles rotated under 1deg "
+                            f"({moved:+.2f}deg last) — the gait is not turning the body"
+                        )
+                        break
+                else:
+                    stalled_cycles = 0
+
+                # The cycle that just started is committed to whatever was
+                # queued, which is `applied`. Record that as the running angle
+                # before changing it, so the prediction above stays honest for
+                # the rest of this cycle.
+                angle_running = applied
+                short_by = target - (turned_right + applied * per_unit)
+                wanted = plan(short_by)
+                if wanted != applied:
+                    applied = wanted
+                    queue(applied)
+                    logger.info(
+                        f"turn_to: {remaining:+.1f}deg to go, next cycle at {applied:+d} "
+                        f"({per_unit:.1f}deg per unit measured)"
+                    )
+        finally:
+            # Zero stride and zero angle is the single-shot stop: it puts the
+            # feet back on the resting footprint and clears the queue, so the
+            # turn actually ends rather than running on after this returns.
+            control.command_queue = [cmd.CMD_MOVE, "1", "0", "0", str(TURN_SPEED), "0"]
             control.timeout = time.time()
             end = time.time() + 15.0
             while time.time() < end:
                 queue_now = getattr(control, "command_queue", None)
                 if isinstance(queue_now, list) and queue_now and queue_now[0] == "":
-                    return True
+                    break
                 time.sleep(0.05)
-            return False
-
-        tracker.start()
-        try:
-            while True:
-                progress = tracker.yaw() * sense if sense else 0.0
-                remaining = abs(target) - progress
-                if abs(remaining) <= tol:
-                    break
-                if steps_done >= max_steps:
-                    outcome = f"stopped at the {max_steps}-step safety cap"
-                    break
-
-                self.read_battery(force=True)
-                refusal = self.motion_refusal("walk", {})
-                if refusal is not None:
-                    outcome = f"aborted: {refusal}"
-                    break
-
-                # Positive angle is turn_right (walk() uses +8/-8); flip it
-                # when correcting an overshoot.
-                magnitude = max(1, min(8, round(abs(remaining) / per_unit)))
-                rightward = (target > 0) == (remaining > 0)
-                angle = magnitude if rightward else -magnitude
-                battery = self.last_battery
-                logger.info(
-                    f"turn_to: step {steps_done + 1}: angle {angle:+d} "
-                    f"(remaining {remaining:+.1f}deg, est {per_unit:.1f}deg/unit"
-                    + (f", battery {battery[0]:.2f}V" if battery else "")
-                    + ")"
-                )
-                before = tracker.yaw()
-                completed = one_cycle(angle)
-                time.sleep(0.4)  # let the step settle before trusting the yaw delta
-                delta = tracker.yaw() - before
-                steps_done += 1
-
-                logger.info(
-                    f"turn_to: step {steps_done} rotated {delta:+.1f}deg, "
-                    f"integrated yaw {tracker.yaw():+.1f}deg"
-                    + ("" if completed else " (gait thread never cleared the command)")
-                )
-                if not completed:
-                    outcome = "aborted: the gait thread did not execute a turn cycle"
-                    break
-                if abs(delta) < 1.0:
-                    weak_steps += 1
-                    if weak_steps >= 2:
-                        outcome = (
-                            f"aborted: two consecutive cycles rotated under 1deg "
-                            f"({delta:+.2f}deg last) — the gait is not rotating the body"
-                        )
-                        break
-                    continue
-                weak_steps = 0
-
-                if sense == 0.0:
-                    # The first productive cycle always runs toward the target
-                    # (progress is 0 until sense is known), so whatever yaw
-                    # sign it produced is, by definition, the sign of progress.
-                    sense = 1.0 if delta > 0 else -1.0
-                    # `sense` is relative to the target's direction; the
-                    # convention worth remembering is the absolute one — which
-                    # way yaw runs for a commanded RIGHT turn. Persist it so
-                    # heading-hold walking does not have to rediscover it.
-                    canonical = sense * (1.0 if angle > 0 else -1.0)
-                    if save_yaw_sign(canonical, "turn_to"):
-                        logger.info(
-                            f"turn_to: learned gyro yaw sign {canonical:+.0f} "
-                            f"(positive yaw = turning right) and saved it"
-                        )
-                # Blend toward the measured per-angle-unit rate; one noisy
-                # cycle should not swing the plan hard.
-                measured_unit = abs(delta) / magnitude
-                per_unit = max(1.5, min(12.0, 0.6 * per_unit + 0.4 * measured_unit))
-        finally:
             final_yaw = tracker.stop()
             run_action("stand", {}, self.hardware_dict)
 
-        achieved = final_yaw * sense if sense else 0.0
-        signed_achieved = achieved if target > 0 else -achieved
+        achieved = final_yaw * yaw_sign if yaw_sign else 0.0
         battery = self.last_battery
         battery_txt = f", battery {battery[0]:.2f}V/{battery[1]:.2f}V" if battery else ""
         return (
-            f"turn_to {outcome}: target {target:+.1f}deg, rotated {signed_achieved:+.1f}deg "
-            f"(residual {target - signed_achieved:+.1f}deg) in {steps_done} gait cycle(s), "
-            f"measured {per_unit:.1f}deg per angle unit, "
-            f"gyro bias {bias:+.2f}deg/s{battery_txt}{note}"
+            f"turn_to {outcome}: target {target:+.1f}deg, rotated {achieved:+.1f}deg "
+            f"(residual {target - achieved:+.1f}deg) in one continuous turn, "
+            f"measured {per_unit:.1f}deg per angle unit per cycle{battery_txt}{note}. "
+            f"{tracker.health()}"
         )
 
     def walk_straight(self, direction, cycles, speed, heading=None, gain=None) -> str:
@@ -675,6 +955,251 @@ class Hardware:
             f"{mode}{unknown}{timing}{battery_txt}{still_note}. {gyro_health}"
         )
 
+    # ----------------------------------------------------------------------
+    # Closed-loop approach
+    # ----------------------------------------------------------------------
+
+    def start_approach(self, call_id, args) -> Optional[str]:
+        """Begin walking toward an obstacle. Returns a refusal, or None if started."""
+        if self.approach is not None:
+            return "Refused: an approach is already running"
+
+        direction = str(args.get("direction", "forward")).strip().lower()
+        if direction not in ("forward", "backward"):
+            return f"approach: direction must be forward or backward, got {direction!r}"
+        try:
+            stop_cm = float(args.get("stop_cm", 20))
+        except (TypeError, ValueError):
+            stop_cm = 20.0
+        stop_cm = max(5.0, min(200.0, stop_cm))
+        try:
+            speed = max(2, min(10, int(args.get("speed", 5))))
+        except (TypeError, ValueError):
+            speed = 5
+        try:
+            max_cycles = max(1, min(40, int(args.get("max_cycles", 25))))
+        except (TypeError, ValueError):
+            max_cycles = 25
+
+        control = self.control
+        run_action("stand", {}, self.hardware_dict)
+
+        tracker = YawTracker(control.imu.sensor)
+        tracker.calibrate(0.6)
+        tracker.start()
+
+        self.approach = Approach(
+            call_id=call_id,
+            stop_cm=stop_cm,
+            speed=speed,
+            direction=direction,
+            max_cycles=max_cycles,
+            started_cycles=control.gait_cycles,
+            tracker=tracker,
+            controller=HeadingHold(),
+            yaw_sign=load_yaw_sign(),
+        )
+        self.last_motion_at = time.time()
+        logger.info(
+            f"approach: will walk {direction} until {stop_cm:.0f}cm away, "
+            f"speed {speed}, cap {max_cycles} cycles — waiting for a distance "
+            f"reading before moving"
+        )
+        return None
+
+    def _start_walking(self, state) -> None:
+        x, y = (0, WALK_STRIDE_MM) if state.direction == "forward" else (0, -WALK_STRIDE_MM)
+        self.control.command_queue = [
+            cmd.CMD_MOVE, "1", str(x), str(y), str(state.speed), "0"
+        ]
+        self.control.timeout = time.time()
+        state.walking = True
+        state.started_cycles = self.control.gait_cycles
+        self.last_motion_at = time.time()
+
+    def approach_distance(self, cm: float) -> Optional[str]:
+        """Feed a distance reading in. Returns a result string once finished."""
+        state = self.approach
+        if state is None:
+            return None
+        filtered = state.add_reading(cm)
+        if filtered is None:
+            return None
+
+        if not state.walking:
+            # First reading. If the robot is already where it was asked to be,
+            # say so and move nothing at all.
+            if state.satisfied(filtered):
+                return self.finish_approach(
+                    f"needed no movement: already {filtered:.1f}cm away, which "
+                    f"satisfies a {state.direction} target of {state.stop_cm:.0f}cm"
+                )
+            self._start_walking(state)
+            logger.info(f"approach: {filtered:.1f}cm away, walking {state.direction}")
+            return None
+
+        cycles = self.control.gait_cycles - state.started_cycles
+        if cycles >= state.max_cycles:
+            return self.finish_approach(
+                f"stopped at the {state.max_cycles}-cycle safety cap without reaching "
+                f"{state.stop_cm:.0f}cm (last reading {filtered:.1f}cm)"
+            )
+
+        # The gait cannot be interrupted mid-cycle: a stop queued now takes
+        # effect at the next cycle boundary, and the robot keeps moving until
+        # then. So decide on where it will BE at that boundary, not where it is.
+        # `closing_rate` is signed — positive while closing, negative while
+        # opening — so this one expression leads correctly in both directions.
+        cycle_s = getattr(self.control, "last_cycle_s", 0.0) or cycle_duration_estimate(
+            1, state.speed
+        )
+        predicted = filtered - state.closing_rate * cycle_s
+        state.lead_cm = abs(predicted - filtered)
+        if state.satisfied(predicted):
+            return self.finish_approach(
+                f"reached {filtered:.1f}cm from the obstacle "
+                f"(target {state.stop_cm:.0f}cm, stopped {state.lead_cm:.1f}cm early "
+                f"to allow for the cycle in flight)"
+            )
+        return None
+
+    def approach_tick(self) -> Optional[str]:
+        """Safety and steering, once per node tick. Returns a result when done."""
+        state = self.approach
+        if state is None:
+            return None
+        now = time.monotonic()
+        control = self.control
+
+        if state.last_cm is None:
+            if now - state.started_at > APPROACH_STALE_S * 2:
+                return self.finish_approach(
+                    "ABORTED: the distance sensor never reported, so nothing moved "
+                    "— is the ultrasonic node in this graph?"
+                )
+            return None
+        if now - state.last_at > APPROACH_STALE_S:
+            return self.finish_approach(
+                f"ABORTED: no distance reading for {now - state.last_at:.1f}s — "
+                f"stopping rather than walking on blind"
+            )
+        if not state.walking:
+            return None
+
+        cycles = control.gait_cycles - state.started_cycles
+        if cycles >= state.max_cycles:
+            return self.finish_approach(
+                f"stopped at the {state.max_cycles}-cycle safety cap without reaching "
+                f"{state.stop_cm:.0f}cm (last reading {state.last_cm})"
+            )
+
+        # A forced battery read costs about a second on the ADS7830, and this
+        # runs on every node tick — four times a second in the approach graph.
+        # Reading it every time would spend most of the approach blocked in the
+        # ADC rather than watching the obstacle.
+        if now - state.last_battery_at > 2.0:
+            state.last_battery_at = now
+            self.read_battery(force=True)
+            refusal = self.motion_refusal("walk", {})
+            if refusal is not None:
+                return self.finish_approach(f"ABORTED: {refusal}")
+
+        # Hold heading while approaching, so "walk up to the wall" goes
+        # straight at it rather than arcing off to one side.
+        if state.yaw_sign is not None:
+            error = state.tracker.yaw() * state.yaw_sign
+            # Measure the interval rather than assuming one: this is driven by
+            # the node's tick, whose rate differs between graphs, and the
+            # controller's integrator is tuned in gait cycles.
+            elapsed = max(1e-3, now - state.last_steer_at)
+            state.last_steer_at = now
+            wanted = state.controller.steer(
+                error, elapsed / max(0.2, cycle_duration_estimate(1, state.speed))
+            )
+            if wanted != state.applied:
+                state.applied = wanted
+                state.corrections += 1
+                x, y = (0, WALK_STRIDE_MM) if state.direction == "forward" else (0, -WALK_STRIDE_MM)
+                control.command_queue = [
+                    cmd.CMD_MOVE, "1", str(x), str(y), str(state.speed), str(wanted)
+                ]
+                control.timeout = time.time()
+        self.last_motion_at = time.time()
+        return None
+
+    def finish_approach(self, reason: str) -> str:
+        """Stop the gait and produce the tool result."""
+        state = self.approach
+        self.approach = None
+        control = self.control
+        control.command_queue = [cmd.CMD_MOVE, "1", "0", "0", str(state.speed), "0"]
+        control.timeout = time.time()
+        end = time.time() + 15.0
+        while time.time() < end:
+            queue_now = getattr(control, "command_queue", None)
+            if isinstance(queue_now, list) and queue_now and queue_now[0] == "":
+                break
+            time.sleep(0.05)
+        final_yaw = state.tracker.stop()
+        self.last_motion_at = time.time()
+
+        cycles = control.gait_cycles - state.started_cycles if state.walking else 0
+        drift = final_yaw * state.yaw_sign if state.yaw_sign else 0.0
+        battery = self.last_battery
+        battery_txt = f", battery {battery[0]:.2f}V/{battery[1]:.2f}V" if battery else ""
+        return (
+            f"approach {reason}. Walked {state.direction} for {cycles} cycles, "
+            f"closest {state.worst_cm if state.worst_cm is not None else '?'}cm, "
+            f"heading drift {drift:+.1f}deg over {state.corrections} correction(s)"
+            f"{battery_txt}. {state.tracker.health()}"
+        )
+
+    def idle_stance_reset(self) -> Optional[str]:
+        """Return to the neutral stance once the robot has stopped and settled.
+
+        A stance is a pose adopted for a purpose — `brace` to be stable,
+        `crouch` to drop the centre of gravity, `tall` to clear something. The
+        purpose ends when the movement does, but the pose used to persist
+        indefinitely, so the robot sat splayed or hunkered until the next
+        command happened to change it. That is not a neutral state to leave
+        hardware in: `wide` and `brace` hold the legs near the outer end of
+        their reach, where the servos work hardest to support the body, and it
+        also means the *next* command starts from a stance nobody chose.
+
+        So: once nothing has moved for `PIBOT_IDLE_STANCE_RESET_S`, stand back
+        up in `neutral`. Deliberately time-based rather than fired at the end
+        of each command, because a stance is usually set precisely so that the
+        movements that follow happen in it — resetting between them would
+        defeat the point. Set the variable to 0 to disable.
+
+        Returns a description if it acted, None otherwise.
+        """
+        if IDLE_STANCE_RESET_S <= 0:
+            return None
+        if self.control is None or self.blocked_reason:
+            return None
+        # Never re-energise servos that were deliberately relaxed. Torque off
+        # is a state someone asked for, and quietly undoing it would both
+        # surprise them and draw current they were trying to save.
+        if self.relaxed:
+            return None
+        if self.applied_stance == "neutral":
+            return None
+        if time.time() - self.last_motion_at < IDLE_STANCE_RESET_S:
+            return None
+        # Same battery gate as any other movement; this drives servos.
+        refusal = self.motion_refusal("set_stance", {})
+        if refusal is not None:
+            return None
+
+        previous = self.applied_stance
+        ok, text = self.apply_stance("neutral")
+        self.last_motion_at = time.time()
+        if not ok:
+            logger.warning(f"idle stance reset from {previous!r} failed: {text}")
+            return None
+        return f"idle for {IDLE_STANCE_RESET_S:.0f}s, reset stance {previous!r} -> 'neutral'"
+
     def motion_refusal(self, tool_name: str, args: dict) -> Optional[str]:
         """Return a refusal string if this motion command must not run."""
         gated = tool_name in MOTION_TOOLS
@@ -715,7 +1240,35 @@ def main() -> None:
             if event["type"] != "INPUT":
                 continue
 
+            if event["id"] == "distance":
+                payload = decode(event) or {}
+                try:
+                    cm = float(payload.get("cm"))
+                except (TypeError, ValueError):
+                    continue
+                # Capture the id first: finishing clears the state.
+                call_id = hw.approach.call_id if hw.approach is not None else None
+                done = hw.approach_distance(cm)
+                if done is not None:
+                    logger.info(done)
+                    node.send_output(
+                        "tool_result",
+                        encode({"id": call_id, "name": "approach",
+                                "text": done, "refused": "ABORTED" in done}),
+                    )
+                continue
+
             if event["id"] == "tick":
+                if hw.approach is not None:
+                    call_id = hw.approach.call_id
+                    done = hw.approach_tick()
+                    if done is not None:
+                        logger.info(done)
+                        node.send_output(
+                            "tool_result",
+                            encode({"id": call_id, "name": "approach",
+                                    "text": done, "refused": "ABORTED" in done}),
+                        )
                 voltage = hw.read_battery(force=True)
                 if voltage is not None:
                     node.send_output(
@@ -725,6 +1278,11 @@ def main() -> None:
 
                 # Surface a dead gait thread instead of letting motion commands
                 # keep returning "success" while nothing moves.
+                reset = hw.idle_stance_reset()
+                if reset is not None:
+                    logger.info(reset)
+                    node.send_output("health", encode({"stance_reset": hw.applied_stance}))
+
                 alive = hw.gait_thread_alive()
                 if alive != gait_was_alive:
                     gait_was_alive = alive
@@ -742,6 +1300,18 @@ def main() -> None:
 
                 name = call["name"]
                 args = call.get("args") or {}
+
+                # Anything that drives servos counts as activity for the idle
+                # stance reset, and `relax` decides whether resetting is
+                # allowed to re-energise them at all. `relax` counts as
+                # activity too even though it is not in MOTION_TOOLS: without
+                # that, re-enabling torque after a long relaxed spell would
+                # look like the robot had been idle the whole time and trigger
+                # a reset in the same instant.
+                if name in MOTION_TOOLS or name == "relax":
+                    hw.last_motion_at = time.time()
+                if name == "relax":
+                    hw.relaxed = bool(args.get("enabled", True))
 
                 # set_stance is served here rather than by src/actions.py,
                 # since it manipulates Control.body_points directly.
@@ -785,6 +1355,22 @@ def main() -> None:
                             }
                         ),
                     )
+                    continue
+
+                # approach is served here and, unlike every other tool, does
+                # not answer immediately: it starts a closed loop and the
+                # result is sent when the robot stops. The call id is kept so
+                # the answer can be matched to the request later.
+                if name == "approach":
+                    refusal = hw.motion_refusal(name, args)
+                    if refusal is None:
+                        refusal = hw.start_approach(call.get("id"), args)
+                    if refusal is not None:
+                        node.send_output(
+                            "tool_result",
+                            encode({"id": call.get("id"), "name": name,
+                                    "text": refusal, "refused": True}),
+                        )
                     continue
 
                 # walk_straight, like turn_to, is served here rather than by
@@ -837,7 +1423,18 @@ def main() -> None:
                     ),
                 )
     finally:
-        # Leave the robot safe: torque off, then release the bus.
+        # Leave the robot safe: stop the gait, then torque off, then release
+        # the bus. Stopping first matters because an approach is a state
+        # machine — the gait keeps running on its own thread whether or not
+        # this loop is still alive, so exiting mid-approach without clearing
+        # the command would leave a walking robot behind until the servos
+        # actually lose power.
+        if hw.control is not None and hw.approach is not None:
+            try:
+                logger.warning("stopping mid-approach")
+                logger.info(hw.finish_approach("ABORTED: the node is shutting down"))
+            except Exception:
+                pass
         if hw.control is not None:
             try:
                 run_action("relax", {"enabled": True}, hw.hardware_dict)

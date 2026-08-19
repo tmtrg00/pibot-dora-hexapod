@@ -139,7 +139,8 @@ nodes/               One file per dora node; each owns its hardware exclusively
   *_test_node.py     harnesses used by the single-purpose test graphs
 src/                 Robot drivers, forked from PiBot-Hexapod (see RUNBOOKS §9)
   control.py         IK engine, gait generation, condition_monitor thread
-  actions.py         LLM tool schemas + hardware dispatch (13 tools; +1 here)
+  gait_profile.py    swing-leg height profile; no driver imports, shared with stances.py
+  actions.py         LLM tool schemas + hardware dispatch (13 tools; +4 here)
   servo.py imu.py led.py ultrasonic.py buzzer.py adc.py camera.py audio.py
   voice.py llm_handler.py memory_db.py led_display.py
 config/config.yaml   All configuration      point.txt      Servo calibration
@@ -155,8 +156,14 @@ bin/py               Node launcher; forces the venv interpreter (RUNBOOKS §2)
 ./run.sh stance     # cycle the named stances (moves legs, does not travel)
 ./run.sh motion     # scripted pose sequence (moves legs, does not travel)
 ./run.sh turn       # rotate in place (LOCOMOTION — travels); PIBOT_TURN_CLOSED_LOOP=1 for gyro-closed turn_to
+./run.sh smoothturn # turn_to through 90/180/20deg, back to start (LOCOMOTION — rotates)
 ./run.sh stancewalk # walk forward/back in each stance (LOCOMOTION — travels)
 ./run.sh crabwalk   # walk sideways right then left (LOCOMOTION — travels)
+./run.sh straightwalk # gyro heading hold, measured against an uncorrected baseline
+./run.sh odometry   # same cycles at three speeds; distance should not vary
+./run.sh approach   # walk up to an obstacle and stop at a set distance
+./run.sh attitude   # roll/pitch axis check — watch the robot, not the log
+./run.sh idlereset  # stance returns to neutral once the robot stops
 ./run.sh camera     # capture attempts only
 ./run.sh            # full autonomous graph, the equivalent of the original main.py
 ./stop.sh           # kill all nodes, release I2C / GPIO / mic / servos
@@ -176,3 +183,10 @@ Names only; full catalogue and credential handling in RUNBOOKS §8.
 - `PIBOT_NO_MOTION` — bring up the ADC but never construct `Control()`; nothing can move.
 - `PIBOT_HOME` — override the project root. Defaults to this directory.
 - `PIBOT_DB_PATH` — SQLite path (default `data/pibot.db`).
+- `PIBOT_GYRO_YAW_SIGN` — override the learned gyro sign; normally measured once
+  and remembered in `data/gyro_sense.json`.
+- `PIBOT_HEADING_GAIN`, `PIBOT_HEADING_I_RATIO` — heading-hold steering gains.
+- `PIBOT_IDLE_STANCE_RESET_S` — seconds idle before returning to `neutral`; 0 disables.
+- `PIBOT_STANCE_RAMP_STEPS`, `PIBOT_STANCE_RAMP_PAUSE_S` — stance transition smoothing.
+- `PIBOT_GAIT_FRAME_MS`, `PIBOT_GAIT_SETDOWN_FRAMES`, `PIBOT_GAIT_GROUND_PRESSURE_MM` — gait timing and foot placement.
+- `PIBOT_SERVO_WRITE_CACHE` — 0 to write every servo every frame, as before.

@@ -14,13 +14,21 @@ Contents: §1 running graphs · §2 how nodes are launched · §3 battery · §4
 All graphs are launched through `./run.sh`, which cleans up orphaned nodes on entry and exit.
 
 ```bash
-./run.sh sensors    # telemetry + LED. NO motion, no mic, no API spend. Start here.
-./run.sh stance     # cycle named stances. Moves legs; does not travel.
-./run.sh motion     # scripted pose sequence. Moves legs; does not travel.
-./run.sh turn       # rotate in place. LOCOMOTION — the robot travels.
-./run.sh camera     # capture attempts only.
-./run.sh            # full autonomous graph. Needs .env; makes API calls.
-./run.sh <file.yml> # any other dataflow
+./run.sh sensors      # telemetry + LED. NO motion, no mic, no API spend. Start here.
+./run.sh stance       # cycle named stances. Moves legs; does not travel.
+./run.sh motion       # scripted pose sequence. Moves legs; does not travel.
+./run.sh attitude     # roll/pitch axis check. Tilts on the spot; does not travel.
+./run.sh idlereset    # stance returns to neutral once idle. Does not travel.
+./run.sh turn         # rotate in place. LOCOMOTION — the robot travels.
+./run.sh smoothturn   # turn_to through 90/180/20°, back to start. LOCOMOTION.
+./run.sh straightwalk # gyro heading hold vs an uncorrected baseline. LOCOMOTION.
+./run.sh odometry     # same cycles at three speeds. LOCOMOTION.
+./run.sh crabwalk     # sideways right then left. LOCOMOTION.
+./run.sh stancewalk   # walk in each stance. LOCOMOTION.
+./run.sh approach     # walk up to an obstacle and stop. LOCOMOTION.
+./run.sh camera       # capture attempts only.
+./run.sh              # full autonomous graph. Needs .env; makes API calls.
+./run.sh <file.yml>   # any other dataflow
 ```
 
 Ctrl+C stops cleanly. After an unclean exit:
@@ -127,14 +135,58 @@ PIBOT_TURN_DEGREES=90 ./run.sh turn      # a specific rotation
 PIBOT_TURN_CYCLES=5 ./run.sh turn        # calibration mode: run N cycles, measure the result
 ```
 
-Turning is **open-loop**, calibrated at ~7.8° of body rotation per gait cycle (measured
-2026-08-16: 23 cycles ≈ 180°). It multiplies out from that figure, so it assumes the surface
-grips consistently. Re-measure with `PIBOT_TURN_CYCLES` on a different surface and set
-`PIBOT_TURN_DEG_PER_CYCLE`.
+`walk(turn_*)` is the open-loop primitive; `turn_to` is the accurate one, closed on the gyro,
+and runs the whole rotation as ONE continuous gait command whose steering angle is re-trimmed
+as the robot turns. It measures its own degrees-per-angle-unit as it goes (seeded at 3.3,
+measured 2026-08-19) so the surface, the stance and the battery stop mattering.
 
-Turning is locomotion, not posing: full gait cycles draw sustained current. `turn_node.py`
-segments the rotation and aborts to a stand-and-relax tail below `PIBOT_TURN_ABORT_V`
-(default 4.9V) rather than collapsing mid-stride.
+```bash
+./run.sh smoothturn                          # 90/180/20° turns, back to the start heading
+PIBOT_SMOOTHTURN_TOLERANCE=3 ./run.sh smoothturn
+PIBOT_TURN_CLOSED_LOOP=1 PIBOT_TURN_DEGREES=90 ./run.sh turn    # a single turn_to
+```
+
+Turning is locomotion, not posing: full gait cycles draw sustained current. Every movement
+graph aborts to a stand-and-relax tail below its `*_ABORT_V` (default 4.9V) rather than
+collapsing mid-stride.
+
+**Which way the gyro counts is measured once and remembered** in `data/gyro_sense.json`
+(untracked). `turn_to` and `walk_straight` both learn it the first time they move and save it;
+`PIBOT_GYRO_YAW_SIGN=+1` or `-1` overrides it. Delete the file to force a re-measure — do that
+if the IMU is ever remounted, because every heading number depends on it.
+
+```bash
+cat data/gyro_sense.json          # {"yaw_sign": -1.0, "learned_from": "turn_to", ...}
+rm data/gyro_sense.json           # re-learn on the next turn or straight walk
+```
+
+### Walking in a straight line
+
+`walk_straight` holds heading on the gyro; `walk` does not. Measured 2026-08-19 over 6 cycles
+each way: 14.9° of drift uncorrected against 3.5° corrected.
+
+```bash
+./run.sh straightwalk                        # corrected vs uncorrected, prints a verdict
+PIBOT_HEADING_GAIN=0.2 ./run.sh straightwalk # firmer steering
+```
+
+### Walking a measured distance
+
+Distance comes from counting gait cycles, not from timing them — `Control.gait_cycles`. The
+old timing estimate was wrong by 3.2x at every speed, so a walk ran about a third of the
+cycles it claimed. `./run.sh odometry` walks the same cycle count at three speeds; the
+distances should be equal.
+
+### Walking up to something
+
+`approach` walks until a given distance from whatever is in front, watching the ultrasonic
+sensor. It needs the ultrasonic node in the graph — the hardware node subscribes to its
+`distance` output. It refuses to move before it has seen a reading, and stops if readings stop.
+
+```bash
+./run.sh approach                             # obstacle 1-1.5m ahead
+PIBOT_APPROACH_STOP_CM=30 ./run.sh approach
+```
 
 ---
 

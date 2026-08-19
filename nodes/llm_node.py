@@ -29,6 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import common
 from common import (
+    approach_tool_schema,
     decode,
     encode,
     get_logger,
@@ -55,12 +56,13 @@ from src.voice import (  # noqa: E402
 NODE = "llm"
 logger = get_logger(NODE)
 
-# The upstream 13 tools plus set_stance, turn_to and walk_straight, which this
-# project adds without touching src/actions.py.
+# The upstream 13 tools plus set_stance, turn_to, walk_straight and approach,
+# which this project adds without touching src/actions.py.
 TOOL_SCHEMAS = list(TOOLS) + [
     stance_tool_schema(),
     turn_tool_schema(),
     walk_straight_tool_schema(),
+    approach_tool_schema(),
 ]
 
 

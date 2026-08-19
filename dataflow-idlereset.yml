@@ -1,0 +1,34 @@
+# Idle-reset graph. MOTION but no travel: the robot adopts a stance and then is
+# left alone, to show that it stands back up on its own once it stops being
+# used — and that it declines to do so when the servos were relaxed on purpose
+# or when it is still busy.
+#
+# Needs servo power and a charged pack, but no floor space beyond the robot's
+# own footprint. Watch the robot, not the log: the whole point is visible.
+#
+#   ./run.sh idlereset
+#   PIBOT_IDLE_STANCE_RESET_S=8 PIBOT_IDLE_WATCH_S=20 ./run.sh idlereset   quicker
+#   PIBOT_IDLE_STANCE=crouch ./run.sh idlereset
+
+nodes:
+  - id: hardware
+    path: bin/py
+    args: nodes/hardware_node.py
+    inputs:
+      tick: dora/timer/millis/1000
+      tool_call: idle_reset/tool_call
+    outputs:
+      - battery
+      - health
+      - tool_result
+
+  - id: idle_reset
+    path: bin/py
+    args: nodes/idle_reset_test_node.py
+    inputs:
+      tick: dora/timer/millis/250
+      tool_result: hardware/tool_result
+      battery: hardware/battery
+      health: hardware/health
+    outputs:
+      - tool_call

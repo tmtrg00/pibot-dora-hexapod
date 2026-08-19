@@ -29,7 +29,13 @@ unnoticed.
 from __future__ import annotations
 
 import math
+import os
+import sys
 from typing import Dict, List, Tuple
+
+# Runnable standalone (`python nodes/stances.py`) as well as importable from a
+# node, so put the project root on the path for the gait-profile import below.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Resting foot positions, mirroring Control.body_points (x, y only; z comes
 # from the height term). Six legs, front-right going clockwise.
@@ -163,6 +169,14 @@ def validate(stance: Stance, margin: float = REACH_MARGIN_MM) -> Tuple[bool, Lis
 # run_gait lifts the swing legs by this much (the Z default in run_gait).
 GAIT_LIFT_MM = 40.0
 
+# The foot-height profile is imported, not reimplemented. The horizontal
+# arithmetic below IS a mirror of run_gait and has to be maintained as one,
+# which is why this module carries `verify_against` as a drift check. The
+# height half needs no such check because there is only one definition of it.
+# src/gait_profile.py deliberately imports no drivers, so this module stays
+# usable without lgpio or a live I2C bus.
+from src.gait_profile import swing_height_a, swing_height_b  # noqa: E402
+
 
 def simulate_gait_reach(
     stance: Stance, x: int = 0, y: int = 0, angle: int = 0, speed: int = 6
@@ -183,7 +197,6 @@ def simulate_gait_reach(
     The wave gait ("2") is not simulated; the test graphs drive gait 1.
     """
     f_frames = round((22 - 126) * (speed - 2) / (10 - 2) + 126)  # map_value(speed, 2,10, 126,22)
-    z_step = GAIT_LIFT_MM / f_frames
     body_height = Z_BASE_MM - stance.z
     points = [[fx, fy, body_height] for fx, fy in stance.footprint()]
 
@@ -209,19 +222,21 @@ def simulate_gait_reach(
     lo = min(frame_reaches())
     hi = max(frame_reaches())
     for j in range(f_frames):
+        # Height from the phase, calling the gait engine's own profile. Worst
+        # case for reach is a swing that begins already raised, so first_cycle
+        # is False.
+        lift_a = body_height + GAIT_LIFT_MM * swing_height_a(j, f_frames)
+        lift_b = body_height + GAIT_LIFT_MM * swing_height_b(j, f_frames, False)
         for i in range(3):
             if j < (f_frames / 8):
                 points[2 * i][0] -= 4 * xy[2 * i][0]
                 points[2 * i][1] -= 4 * xy[2 * i][1]
                 points[2 * i + 1][0] += 8 * xy[2 * i + 1][0]
                 points[2 * i + 1][1] += 8 * xy[2 * i + 1][1]
-                points[2 * i + 1][2] = GAIT_LIFT_MM + body_height
             elif j < (f_frames / 4):
                 points[2 * i][0] -= 4 * xy[2 * i][0]
                 points[2 * i][1] -= 4 * xy[2 * i][1]
-                points[2 * i + 1][2] -= z_step * 8
             elif j < (3 * f_frames / 8):
-                points[2 * i][2] += z_step * 8
                 points[2 * i + 1][0] -= 4 * xy[2 * i + 1][0]
                 points[2 * i + 1][1] -= 4 * xy[2 * i + 1][1]
             elif j < (5 * f_frames / 8):
@@ -230,18 +245,18 @@ def simulate_gait_reach(
                 points[2 * i + 1][0] -= 4 * xy[2 * i + 1][0]
                 points[2 * i + 1][1] -= 4 * xy[2 * i + 1][1]
             elif j < (3 * f_frames / 4):
-                points[2 * i][2] -= z_step * 8
                 points[2 * i + 1][0] -= 4 * xy[2 * i + 1][0]
                 points[2 * i + 1][1] -= 4 * xy[2 * i + 1][1]
             elif j < (7 * f_frames / 8):
                 points[2 * i][0] -= 4 * xy[2 * i][0]
                 points[2 * i][1] -= 4 * xy[2 * i][1]
-                points[2 * i + 1][2] += z_step * 8
             else:
                 points[2 * i][0] -= 4 * xy[2 * i][0]
                 points[2 * i][1] -= 4 * xy[2 * i][1]
                 points[2 * i + 1][0] += 8 * xy[2 * i + 1][0]
                 points[2 * i + 1][1] += 8 * xy[2 * i + 1][1]
+            points[2 * i][2] = lift_a
+            points[2 * i + 1][2] = lift_b
         reaches = frame_reaches()
         lo = min(lo, min(reaches))
         hi = max(hi, max(reaches))

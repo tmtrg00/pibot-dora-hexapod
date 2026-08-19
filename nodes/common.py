@@ -131,6 +131,7 @@ TOOL_OWNER: Dict[str, str] = {
     "set_stance": "hardware",
     "turn_to": "hardware",
     "walk_straight": "hardware",
+    "approach": "hardware",
     "set_led": "led",
     "buzz": "buzzer",
     "get_distance": "ultrasonic",
@@ -150,6 +151,7 @@ MOTION_TOOLS = {
     "set_stance",
     "turn_to",
     "walk_straight",
+    "approach",
 }
 
 
@@ -266,6 +268,51 @@ def walk_straight_tool_schema() -> Dict[str, Any]:
                     },
                 },
                 "required": ["direction"],
+            },
+        },
+    }
+
+
+def approach_tool_schema() -> Dict[str, Any]:
+    """OpenAI tool schema for approach, appended to the upstream TOOLS list.
+
+    The distance sensor and the legs live in different processes, so this tool
+    is what joins them: the hardware node subscribes to the ultrasonic node's
+    distance stream and closes the loop itself, rather than the brain having to
+    alternate `get_distance` and `walk` across two round trips per step.
+    """
+    return {
+        "type": "function",
+        "function": {
+            "name": "approach",
+            "description": (
+                "Walk toward whatever is in front until a given distance away, "
+                "watching the ultrasonic sensor the whole time and stopping "
+                "automatically. Use this instead of guessing how many steps to "
+                "walk when the goal is to end up near something. Also walks "
+                "backward to open a gap."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "stop_cm": {
+                        "type": "number",
+                        "description": "Distance to stop at, in centimetres (5-200). Default 20.",
+                    },
+                    "direction": {
+                        "type": "string",
+                        "enum": ["forward", "backward"],
+                        "description": "Walk toward the obstacle or away from it. Default forward.",
+                    },
+                    "speed": {
+                        "type": "integer",
+                        "description": "Gait speed (2-10). Default 5; slower stops more precisely.",
+                    },
+                    "max_cycles": {
+                        "type": "integer",
+                        "description": "Safety cap on gait cycles (1-40). Default 25.",
+                    },
+                },
             },
         },
     }

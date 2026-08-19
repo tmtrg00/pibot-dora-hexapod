@@ -1,0 +1,51 @@
+# Approach graph. LOCOMOTION: the robot walks toward whatever is in front of it
+# and stops itself at a set distance, watching the ultrasonic sensor the whole
+# way.
+#
+# This is the first graph in which two device nodes close a control loop
+# together: the ultrasonic node publishes distance, the hardware node walks and
+# decides when to stop. Neither knows anything about the other beyond the
+# message. The gait runs on its own thread, so the hardware node's event loop
+# stays free to receive distance readings while the robot is walking.
+#
+# Put a wall, a box or a book upright about 1-1.5m in front of the robot, with
+# clear floor between. It stops on its own; the safety cap stops it anyway if
+# the sensor goes quiet.
+#
+#   ./run.sh approach
+#   PIBOT_APPROACH_STOP_CM=30 ./run.sh approach
+#   PIBOT_APPROACH_RETREAT=0 ./run.sh approach     approach only, no backing off
+
+nodes:
+  - id: hardware
+    path: bin/py
+    args: nodes/hardware_node.py
+    inputs:
+      tick: dora/timer/millis/250
+      tool_call: approach_test/tool_call
+      distance: ultrasonic/distance
+    outputs:
+      - battery
+      - health
+      - tool_result
+
+  - id: ultrasonic
+    path: bin/py
+    args: nodes/ultrasonic_node.py
+    inputs:
+      tick: dora/timer/millis/200
+      tool_call: approach_test/tool_call
+    outputs:
+      - distance
+      - tool_result
+
+  - id: approach_test
+    path: bin/py
+    args: nodes/approach_test_node.py
+    inputs:
+      tick: dora/timer/millis/250
+      tool_result: hardware/tool_result
+      battery: hardware/battery
+      distance: ultrasonic/distance
+    outputs:
+      - tool_call

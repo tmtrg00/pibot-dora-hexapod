@@ -7,6 +7,156 @@ revert an old entry.
 
 ---
 
+## 2026-08-19 — Turning made continuous, obstacle approach closed on the ultrasonic, and the gait's foot placement, servo traffic and attitude axes all fixed
+
+The rest of the movement programme, implemented and smoke-tested offline in one pass.
+**Nothing in this entry has run on the robot yet** — the owner is testing it manually, and
+every claim below is from simulation or from reading the code. The graphs to run are listed at
+the end. Where a number appears it comes from a simulated robot, and says so.
+
+### Turning is one continuous rotation instead of a series of lurches
+
+Prioritised ahead of the rest at the owner's instruction, after they observed the stutter twice.
+The cause was structural. `condition_monitor` treated any command without a stride as
+single-shot — one `run_gait` call, then the queue was cleared — and a turn has no stride. So
+`turn_to` had to drive the rotation from outside as a sequence of separate one-cycle commands,
+each waiting for the queue to clear and pausing 0.4s to let the body settle before measuring.
+
+**Fix:** the single-shot rule now applies only to the genuine stop-and-stand command, which
+has neither stride nor angle. A turn stays queued, `run_gait` re-enters it cycle after cycle,
+and `turn_to` was rewritten around that: one command, its steering angle re-trimmed as the
+robot rotates. `walk`'s separate re-queue-per-cycle path for turns is gone with it.
+
+**Decision:** the turn plans one cycle AHEAD and stops only when stopping beats stepping again.
+Three separate failures in simulation forced this, all of them consequences of a gait cycle
+being uninterruptible, and all of them producing a *worse* landing than the stuttering version:
+planning from the current heading is always one cycle late, and overshot a 90deg target by
+15.6deg; reconsidering only at cycle boundaries made a 20deg turn take four cycles and
+oscillate; and stopping at the first moment that merely fell inside tolerance halted a 90deg
+turn 4.8deg short when the cycle already planned would have landed 1.2deg short. The rotation
+per angle unit is also now averaged over the whole turn rather than taken per cycle, because
+this loop notices a cycle boundary up to a sampling interval late and that jitter alone read
+3.6 on a simulated robot really doing 3.3. Swept across a 3.7x range of robot responsiveness,
+with the gyro sign both known and unlearned, worst error is 4.5deg against a 5deg tolerance.
+
+**Fix:** the seed for degrees-per-angle-unit drops from 4.5 to 3.3, the figure two `turn_to`
+runs measured on 2026-08-19. The old value over-predicted every cycle by about a third, which
+is why turns consistently stopped short.
+
+### The robot walks up to things and stops
+
+New `approach` tool: walk until a given distance from whatever is in front, closed on the
+ultrasonic sensor. This is the first time two device nodes have closed a control loop together
+— the ultrasonic node owns the sensor and publishes distance, the hardware node owns the legs
+and decides when to stop — which is the architecture's central claim being used rather than
+asserted. `dataflow.yml` gains one wire for it.
+
+**Decision:** it is a state machine driven by the node's event loop, not a blocking loop like
+`turn_to`. The gait runs on its own thread, so blocking would not have kept the robot walking;
+it would only have stopped the node receiving the distance messages the loop is closed on.
+
+**Decision:** the robot never moves before it has seen a reading. Walking first and looking
+afterwards would commit it to a gait cycle it cannot take back. If the target is already
+satisfied it reports that and moves nothing at all; if readings stop arriving it stops rather
+than continuing blind; and a cycle cap bounds it either way.
+
+**Fix:** readings are median-filtered over three samples, because the HC-SR04 occasionally
+returns a wild value and the stop decision reads it. The stop is also issued early by the
+distance still to be covered in the cycle in flight, since that cycle cannot be interrupted —
+signed, so it leads correctly whether closing on an obstacle or backing away from one.
+
+### Stance changes are ramped
+
+A stance change was one `set_leg_angles()`, so the body dropped or the feet snapped outward as
+fast as eighteen servos could slew. It is now split into four smaller moves, each reach-checked
+before it is applied — interpolating between two reachable poses does not by itself guarantee
+the path between them stays inside the 90..248mm window, and `set_leg_angles()` fails silently
+when it does not. Verified across all 56 ordered pairs of stances.
+
+### The gait places its feet instead of dropping them
+
+Measuring before changing corrected the original research. There is **no** per-step teleport:
+the swing leg's commanded height is continuous across cycle boundaries, because the previous
+cycle leaves it in the air. Two real problems were there instead.
+
+**Fix:** foot height is computed from the phase rather than accumulated frame by frame, and
+follows an eased profile instead of a constant rate. The old constant-rate ramp stepped
+vertical velocity from 0 to ~430mm/s and back to 0 at each phase boundary — an impulsive
+acceleration at exactly the two moments that matter, lift-off and touchdown, which is what
+slaps a foot into the floor. Same lift, same timing, same endpoints; only the shape between
+them changes. Simulated touchdown speed falls by 48-78% depending on gait speed.
+
+**Fix:** the 40mm jump when setting off is gone. Starting from a stand every foot is on the
+ground, and the old code commanded one tripod straight to full lift height in a single 10ms
+frame — a lurch once per walk. It now eases up over the opening phase. The mirror image, a
+tripod dropping 40mm when a walk stops, is fixed the same way by `set_feet_down`.
+
+**Fix:** computing height from the phase also removes an accumulation artifact. Phase
+boundaries fall on fractions of the frame count but frames are whole numbers, so the old
+per-frame increments over- or under-shot the lift by a few percent and left a stance foot
+commanded up to ~3mm below the resting plane. `PIBOT_GAIT_GROUND_PRESSURE_MM` exists to put
+that back deliberately if the stance legs turn out to want it.
+
+`nodes/stances.py` mirrors this arithmetic for its offline reach check and was re-synced —
+exactly the drift that module's own docstring warns about. The height profile it now *calls*
+rather than copies, so that half cannot drift again. The profile moved to a new
+`src/gait_profile.py` for that: it is a pure function of the phase and imports nothing, which
+keeps `stances.py` free of the driver stack. Importing `control` directly, as a first attempt
+did, would have dragged `lgpio` and the I2C drivers into a module whose whole purpose is to
+answer reach questions offline.
+
+### The gait stops writing servos that have not moved
+
+The gait wrote all 18 leg servos every frame at ~100 frames a second, and most frames do not
+change most joints: leg angles are whole degrees and a frame often moves a joint by less than
+one. Those writes cost real time on a bus the gyro sampler is also using — and that contention
+is what tore the gyro reads fixed earlier today. `Servo` now skips a write when the channel
+already holds the value being asked for, which is safe precisely because a PCA9685 channel
+holds its value: not writing is what leaves the servo where it is. Simulated saving is 20-56%
+of all bus writes, most at slow speeds where per-frame movement is smallest.
+
+**Fix:** every path that drives a channel behind `set_servo_angle`'s back now invalidates the
+cache — relaxing one head servo, relaxing everything, cutting the power rail. Without that the
+next command to a relaxed channel would be skipped as redundant and the servo would stay limp.
+
+**Fix:** gait frames are scheduled against an absolute deadline rather than sleeping a fixed
+10ms after each frame's work. The period is now what it says it is whenever the work fits
+inside it, a frame that finishes early gives its time back instead of extending the cycle, and
+lateness is never carried forward and compounded. Frames that overrun are counted rather than
+hidden.
+
+### Roll and pitch tilted the wrong axes
+
+**Fix:** `calculate_posture_balance` built its X rotation from the pitch argument and its Y
+rotation from the roll argument. Confirmed by computing the commanded foot heights: `roll`
+moved the nose and tail legs and `pitch` moved the two side legs. So `set_attitude(roll=10)`
+tilted the robot nose-down, and `lean_forward` — a stance whose description says nose-down —
+leaned it sideways.
+
+**Fix:** `imu6050` unpacked `update_imu_state()` as roll-first when it returns pitch first.
+This is why the balance loop was never visibly broken: two swaps that cancelled. Both are
+corrected together, since fixing either alone would have broken balancing.
+
+**Fix:** roll and pitch shared one `Incremental_PID`. That object carries `last_error` and an
+integral accumulator, so each axis computed its derivative against the other axis's previous
+error and the two shared one integrator. They now have one controller each.
+
+### To verify on hardware
+
+`./run.sh smoothturn` (turning), `./run.sh approach` (obstacle approach — needs an obstacle
+about 1-1.5m ahead), `./run.sh attitude` (roll/pitch axes — watch the robot, not the log),
+`./run.sh idlereset` (stance reset), and re-run `./run.sh straightwalk` and `./run.sh odometry`,
+which exercise the gait and servo changes. The attitude and turn graphs are the two whose
+verdict only a person watching can give.
+
+Plain-language summary: the robot now turns in one smooth movement instead of a series of
+jerks; it can walk up to a wall and stop at a chosen distance by watching with its distance
+sensor as it goes; it eases into a crouch rather than dropping into one; it places its feet
+down instead of slapping them, and no longer lurches when setting off or thumps when stopping;
+it stops sending instructions to legs that are already where they should be, which frees up the
+wire its balance sensor shares; and "lean left" now leans left, which it did not before —
+that instruction and "lean forward" were wired to each other's directions.
+
 ## 2026-08-19 — A walk now runs the gait cycles it was asked for, and the gyro stopped inventing rotations that drove the robot into a real spin
 
 Two pieces of work that turned out to be one story: making distance honest exposed a

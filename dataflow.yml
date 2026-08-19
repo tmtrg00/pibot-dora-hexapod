@@ -70,6 +70,9 @@ nodes:
     inputs:
       tick: dora/timer/millis/2000
       tool_call: brain/tool_call
+      # The `approach` tool closes a loop between the distance sensor and the
+      # legs, which live in different processes. This is the join.
+      distance: ultrasonic/distance
     outputs:
       - battery
       - health
