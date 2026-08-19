@@ -258,11 +258,51 @@ def _map_value(value: int, from_low: int, from_high: int, to_low: int, to_high: 
 
 
 def _estimated_cycle_duration(gait: int, speed: int) -> float:
+    """Rough seconds per gait cycle, from the frame count and the frame delay.
+
+    An underestimate by design: it counts run_gait's 10ms sleep per frame but
+    not the 18 servo writes each frame also spends on the I2C bus. Use it to
+    size a timeout, not to decide when a walk is finished — `_wait_for_cycles`
+    does that by counting real cycles.
+    """
     if gait == 1:
         f_value = round(_map_value(speed, 2, 10, 126, 22))
     else:
         f_value = round(_map_value(speed, 2, 10, 171, 45))
     return max(0.2, (f_value * 0.01) + 0.05)
+
+
+def _cycles_run(control: Any) -> int:
+    """Completed gait cycles, or 0 against a Control that predates the counter."""
+    return getattr(control, "gait_cycles", 0)
+
+
+def _wait_for_cycles(control: Any, cycles: int, timeout_s: float,
+                     fallback_s: float = 0.0, interval_s: float = 0.02) -> int:
+    """Block until `cycles` more gait cycles have run. Returns how many did.
+
+    Counting beats timing here. Sleeping for an estimated duration made the
+    distance travelled depend on how well the estimate matched the hardware,
+    and it never did: the estimate ignores I2C time, so a walk consistently
+    stopped short of the cycles it was asked for. `Control.gait_cycles` counts
+    completed cycles directly, so "walk 5 cycles" now means five.
+
+    `timeout_s` is a safety bound, not the expected duration, so a Control that
+    predates the counter sleeps `fallback_s` — the old estimate — rather than
+    the timeout, which would be far too long.
+    """
+    start = getattr(control, "gait_cycles", None)
+    if start is None:
+        time.sleep(fallback_s if fallback_s else timeout_s)
+        return cycles
+
+    end = time.time() + timeout_s
+    while time.time() < end:
+        done = control.gait_cycles - start
+        if done >= cycles:
+            return done
+        time.sleep(interval_s)
+    return control.gait_cycles - start
 
 
 def _relax_servo_channel(servo: Any, channel: int) -> None:
@@ -371,11 +411,57 @@ def execute(name: str, args: Dict[str, Any], hardware: Dict[str, Any]) -> Option
             else:
                 return "Invalid walk direction"
 
-            _queue_command(control, [cmd.CMD_MOVE, str(gait), str(x), str(y), str(speed), str(angle)])
-            time.sleep(_estimated_cycle_duration(gait, speed) * steps)
+            move = [cmd.CMD_MOVE, str(gait), str(x), str(y), str(speed), str(angle)]
+            # Generous: a cycle can run well over its estimate on a tired pack.
+            budget = max(3.0, _estimated_cycle_duration(gait, speed) * 3 + 2.0)
+            before = _cycles_run(control)
+
+            if x == 0 and y == 0:
+                # A turn is single-shot in condition_monitor: it runs one cycle
+                # and then clears the queue, so each cycle has to be re-queued.
+                # Waiting on the queue clearing rather than on the cycle counter
+                # matters here — the counter is incremented *before* the queue is
+                # cleared, so re-queueing the moment it ticks would hand
+                # condition_monitor a fresh command that it then wipes.
+                queued = 0
+                while queued < steps:
+                    at_queue_time = _cycles_run(control)
+                    _queue_command(control, move)
+                    if not _wait_for_clear(control, timeout_s=budget):
+                        break
+                    if _cycles_run(control) == at_queue_time:
+                        break  # the queue cleared without a cycle actually running
+                    queued += 1
+            else:
+                # A stride keeps the queue, so run_gait re-enters itself and
+                # all this has to do is count cycles off until it has enough.
+                # It waits for one *fewer* than asked: run_gait only re-reads
+                # the queue between cycles, so the stop has to be queued while
+                # the final cycle is still running. Queueing it after the Nth
+                # completed would let an N+1th start, overshooting by a stride.
+                _queue_command(control, move)
+                # Let condition_monitor pick the command up before a
+                # steps=1 walk can stop it again.
+                time.sleep(0.15)
+                _wait_for_cycles(
+                    control,
+                    max(0, steps - 1),
+                    budget * steps,
+                    fallback_s=_estimated_cycle_duration(gait, speed) * steps,
+                )
+
             _queue_command(control, [cmd.CMD_MOVE, str(gait), "0", "0", str(speed), "0"])
             _wait_for_clear(control)
-            return f"Walked {direction} for {steps} cycles"
+            # Count after the stop has landed, so this reports what the robot
+            # actually did rather than what was waited for.
+            done = _cycles_run(control) - before
+            measured = getattr(control, "last_cycle_s", 0.0)
+            shortfall = "" if done >= steps else f", short of the {steps} asked for"
+            return (
+                f"Walked {direction} for {done} cycles"
+                + (f" at {measured:.2f}s per cycle" if measured else "")
+                + shortfall
+            )
 
         if name == "set_position":
             if control is None:

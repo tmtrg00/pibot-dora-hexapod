@@ -1,0 +1,38 @@
+# Odometry graph. LOCOMOTION: walks the same number of gait cycles at three
+# different speeds, pausing between each so the floor can be marked, then
+# returns and compares turn cycle counts.
+#
+# The question it answers is one a ruler can settle: the same number of cycles
+# should cover the same ground at any speed. It did not before, because a walk
+# stopped after an estimated duration rather than after the cycles it was asked
+# for, and the estimate's error varies with speed.
+#
+# Needs about a metre of clear floor ahead and room to turn in place.
+#
+#   ./run.sh odometry
+#   PIBOT_ODO_CYCLES=10 ./run.sh odometry          longer legs, easier to measure
+#   PIBOT_ODO_SPEEDS=2,10 ./run.sh odometry        the extremes only
+#   PIBOT_ODO_TURNS=0 ./run.sh odometry            distance test only
+
+nodes:
+  - id: hardware
+    path: bin/py
+    args: nodes/hardware_node.py
+    inputs:
+      tick: dora/timer/millis/1000
+      tool_call: odometry/tool_call
+    outputs:
+      - battery
+      - health
+      - tool_result
+
+  - id: odometry
+    path: bin/py
+    args: nodes/odometry_test_node.py
+    inputs:
+      tick: dora/timer/millis/250
+      tool_result: hardware/tool_result
+      battery: hardware/battery
+      health: hardware/health
+    outputs:
+      - tool_call

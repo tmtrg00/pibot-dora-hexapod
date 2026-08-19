@@ -33,11 +33,24 @@ import threading
 import time
 from typing import Optional, Tuple
 
-# MPU6050 z-gyro, read raw: one I2C word per sample instead of the seven
-# transactions get_gyro_data() spends, because the sampler shares the bus with
-# ~1800 servo writes/s while the gait runs.
+# MPU6050 z-gyro, read raw: one I2C transaction per sample instead of the seven
+# get_gyro_data() spends, because the sampler shares the bus with ~1800 servo
+# writes/s while the gait runs.
 GYRO_Z_REG = 0x47
 GYRO_LSB_PER_DPS = 131.0  # the 250deg/s range src/imu.py configures
+
+# Full scale at the configured range. A walking hexapod rotates at well under
+# 20deg/s and even a hard turn is about 15deg/s, so a sample anywhere near this
+# is saturation or a corrupt read, never real motion.
+GYRO_FULL_SCALE_DPS = 250.0
+MAX_PLAUSIBLE_DPS = 150.0
+
+# One rate sample stands for at most this much elapsed time. Normal sampling is
+# ~7ms, so this never binds in healthy operation; it exists because the gait
+# can stall an I2C read for hundreds of milliseconds, and multiplying one
+# instantaneous rate by a 300ms gap turns a single bad sample into tens of
+# degrees of phantom rotation.
+MAX_SAMPLE_DT_S = 0.05
 
 # Where the learned sign is remembered. Relative to the project root, which
 # common.bootstrap() has already chdir'd into by the time any node calls this.
@@ -65,8 +78,41 @@ class YawTracker:
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
+        # Health counters, so a walk can report how much it had to throw away
+        # rather than quietly integrating rubbish.
+        self.samples = 0
+        self.rejected_implausible = 0
+        self.clamped_gaps = 0
+        self.read_errors = 0
+        self.worst_gap_s = 0.0
 
     def _read_dps(self) -> float:
+        """One z-gyro sample, read as a single atomic I2C transaction.
+
+        This must not be two `read_byte_data` calls. `mpu6050.read_i2c_word`
+        does exactly that — high byte, then low byte, as separate transactions —
+        and the MPU6050 updates its registers at 1kHz underneath. A gait cycle
+        issues ~1800 servo writes a second on the same bus, so the window
+        between those two reads is wide and frequently lands across a sample
+        boundary. The resulting torn word takes the high byte from one sample
+        and the low byte from the next; when it tears across the sign bit the
+        value is near full scale, and integrating that produced tens of degrees
+        of rotation the robot never made (observed 2026-08-19: a reported 79deg
+        of yaw in one second, which then drove a real 25-second spin).
+
+        A block read of both bytes is one transaction and the device latches
+        the pair, so it cannot tear.
+        """
+        bus = getattr(self.sensor, "bus", None)
+        address = getattr(self.sensor, "address", None)
+        if bus is not None and address is not None:
+            high, low = bus.read_i2c_block_data(address, GYRO_Z_REG, 2)
+            value = (high << 8) | low
+            if value >= 0x8000:
+                value -= 0x10000
+            return value / GYRO_LSB_PER_DPS
+        # Fall back to the driver's own reader if this sensor does not expose a
+        # bus — correctness of the fallback is the driver's problem, not ours.
         return self.sensor.read_i2c_word(GYRO_Z_REG) / GYRO_LSB_PER_DPS
 
     def calibrate(self, seconds: float = 1.0) -> Tuple[float, float]:
@@ -74,8 +120,13 @@ class YawTracker:
         samples = []
         end = time.monotonic() + seconds
         while time.monotonic() < end:
-            samples.append(self._read_dps())
+            try:
+                samples.append(self._read_dps())
+            except Exception:
+                self.read_errors += 1
             time.sleep(0.005)
+        if not samples:
+            return 0.0, float("inf")
         self.bias_dps = sum(samples) / len(samples)
         return self.bias_dps, max(samples) - min(samples)
 
@@ -94,18 +145,47 @@ class YawTracker:
                 # One bad bus transaction mid-gait is survivable; a dead
                 # sampler thread would silently freeze the yaw estimate, so
                 # keep the loop alive and let the next sample land.
+                self.read_errors += 1
                 time.sleep(0.01)
                 last = time.monotonic()
                 continue
             now = time.monotonic()
-            with self._lock:
-                self._yaw_deg += dps * (now - last)
+            gap = now - last
             last = now
+            self.samples += 1
+            self.worst_gap_s = max(self.worst_gap_s, gap)
+
+            if abs(dps) > MAX_PLAUSIBLE_DPS:
+                # Saturation or a corrupt read. The robot does not rotate this
+                # fast, so integrating it can only do harm.
+                self.rejected_implausible += 1
+                time.sleep(0.005)
+                continue
+            if gap > MAX_SAMPLE_DT_S:
+                # The bus stalled. This one instantaneous rate is not evidence
+                # about the whole gap, so credit it with a normal sample's
+                # worth of time instead of the whole stall.
+                self.clamped_gaps += 1
+                gap = MAX_SAMPLE_DT_S
+
+            with self._lock:
+                self._yaw_deg += dps * gap
             time.sleep(0.005)
 
     def yaw(self) -> float:
         with self._lock:
             return self._yaw_deg
+
+    def health(self) -> str:
+        """One-line summary of how trustworthy this run's integration was."""
+        if not self.samples:
+            return "no gyro samples taken"
+        bad = self.rejected_implausible + self.read_errors
+        return (
+            f"{self.samples} gyro samples, {bad} bad "
+            f"({self.rejected_implausible} implausible, {self.read_errors} read errors), "
+            f"{self.clamped_gaps} stalled reads clamped, worst gap {self.worst_gap_s * 1000:.0f}ms"
+        )
 
     def stop(self) -> float:
         self._running = False

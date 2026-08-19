@@ -29,6 +29,15 @@ class Control:
         self.calibration_angles = [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]]
         self.current_angles = [[90, 0, 0], [90, 0, 0], [90, 0, 0], [90, 0, 0], [90, 0, 0], [90, 0, 0]]
         self.command_queue = ['', '', '', '', '', '']
+        # Gait odometry. run_gait() executes exactly one gait cycle per call,
+        # but nothing outside this class could tell when a cycle began or
+        # ended, so callers wanting "walk N cycles" had to sleep for an
+        # estimated duration and hope. These two make a cycle observable:
+        # gait_cycles counts completed cycles, last_cycle_s is how long the
+        # most recent one actually took. Both are written only by run_gait and
+        # only ever read elsewhere.
+        self.gait_cycles = 0
+        self.last_cycle_s = 0.0
         self.calibrate()
         self.set_leg_angles()
         self.condition_thread = threading.Thread(target=self.condition_monitor, daemon=True)
@@ -343,7 +352,11 @@ class Control:
         for i in range(6):
             xy[i][0] = ((points[i][0] * math.cos(angle / 180 * math.pi) + points[i][1] * math.sin(angle / 180 * math.pi) - points[i][0]) + x) / F
             xy[i][1] = ((-points[i][0] * math.sin(angle / 180 * math.pi) + points[i][1] * math.cos(angle / 180 * math.pi) - points[i][1]) + y) / F
+        cycle_started = time.time()
         if x == 0 and y == 0 and angle == 0:
+            # Not a gait cycle: this is the "stop and stand" form, which just
+            # puts the feet back on the resting footprint. It is deliberately
+            # not counted, so gait_cycles stays a count of cycles *travelled*.
             self.transform_coordinates(points)
             self.set_leg_angles()
         elif gait == "1":
@@ -384,6 +397,8 @@ class Control:
                 self.transform_coordinates(points)
                 self.set_leg_angles()
                 time.sleep(delay)
+            self.last_cycle_s = time.time() - cycle_started
+            self.gait_cycles += 1
         elif gait == "2":
             number = [5, 2, 1, 0, 3, 4]
             for i in range(6):
@@ -403,6 +418,8 @@ class Control:
                     self.transform_coordinates(points)
                     self.set_leg_angles()
                     time.sleep(delay)
+            self.last_cycle_s = time.time() - cycle_started
+            self.gait_cycles += 1
 
 if __name__ == '__main__':
     pass

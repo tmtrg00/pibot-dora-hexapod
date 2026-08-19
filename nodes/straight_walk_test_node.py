@@ -205,6 +205,21 @@ def main() -> None:
                 or "rejected" in text
                 or "refused" in text
             )
+            # Guard the experiment itself. The baseline leg is only a baseline
+            # if the steering gain really reached the hardware node; the first
+            # time this ran it did not — `gain` was dropped in tool dispatch,
+            # so both legs were corrected and the comparison silently measured
+            # nothing (2026-08-19). The hardware node says "measured
+            # uncorrected" only when the gain actually arrived as zero, so
+            # check for it rather than trusting that the argument got through.
+            if steps[index][0].startswith("UNCORRECTED") and "measured uncorrected" not in text:
+                refused = True
+                text = (
+                    "BASELINE INVALID: this leg was supposed to run with the "
+                    "steering gain at zero, but the hardware node did not report "
+                    "it as uncorrected. The comparison would be meaningless. "
+                    + text
+                )
             logger.info(f"    {'FAILED' if refused else 'ok'}: {text}")
             results.append((steps[index][0], text, refused))
             if refused:

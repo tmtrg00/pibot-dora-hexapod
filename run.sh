@@ -37,6 +37,7 @@ case "${1:-full}" in
   stancewalk) DATAFLOW="dataflow-stancewalk.yml" ;;
   crabwalk) DATAFLOW="dataflow-crabwalk.yml" ;;
   straightwalk) DATAFLOW="dataflow-straightwalk.yml" ;;
+  odometry) DATAFLOW="dataflow-odometry.yml" ;;
   *)        DATAFLOW="$1" ;;
 esac
 

@@ -99,6 +99,10 @@ SIGN_PROBE_ANGLE = 1
 SIGN_PROBE_MIN_DEG = 2.0
 SIGN_PROBE_TIMEOUT_S = 6.0
 
+# Log the heading this often even when the steering command is unchanged, so a
+# long walk never goes silent.
+HEARTBEAT_S = 3.0
+
 
 def cycle_duration_estimate(gait: int, speed: int) -> float:
     """How long one gait cycle is expected to take, in seconds.
@@ -479,7 +483,13 @@ class Hardware:
 
         control = self.control
         cycle_s = cycle_duration_estimate(1, speed)
-        duration = cycle_s * cycles
+        # The walk ends when the gait has run the cycles asked for, counted off
+        # Control.gait_cycles — not when an estimated duration has elapsed. The
+        # estimate ignores I2C time, so timing the walk made it stop short.
+        # The estimate is still used to size the safety timeout and to scale
+        # the controller's integrator.
+        started_cycles = control.gait_cycles
+        deadline = time.monotonic() + cycle_s * cycles * 3 + 10.0
         # The steering loop samples faster than the gait cycles; tell the
         # controller how much of a cycle each sample covers so its integrator
         # is tuned in cycles, not in whatever interval this node happens to use.
@@ -522,14 +532,30 @@ class Hardware:
         outcome = "completed"
         probe_started = None
         probe_until = 0.0
+        last_heartbeat = time.monotonic()
 
         tracker.start()
         queue(0)
-        started = time.monotonic()
         last_battery_check = time.time()
         try:
-            while time.monotonic() - started < duration:
+            while True:
                 time.sleep(STEER_INTERVAL_S)
+
+                # Stop one cycle early. In continuous mode `run_gait` only
+                # re-reads the queue between cycles, so a stop queued now takes
+                # effect at the end of the cycle already running — queueing it
+                # after the Nth cycle completes would let an N+1th start and
+                # overshoot by a full stride. The leading sleep above
+                # guarantees condition_monitor has picked the walk up before
+                # this can fire, which is what makes cycles=1 work.
+                if control.gait_cycles - started_cycles >= cycles - 1:
+                    break
+                if time.monotonic() > deadline:
+                    outcome = (
+                        f"stopped on a timeout after "
+                        f"{control.gait_cycles - started_cycles}/{cycles} cycles"
+                    )
+                    break
 
                 # Re-read the pack mid-walk: a long walk is exactly where a
                 # marginal pack sags below the floor, and stopping late means
@@ -595,6 +621,17 @@ class Hardware:
                         f"walk_straight: heading {error:+.1f}deg off line, "
                         f"steering {applied:+d}"
                     )
+                elif time.monotonic() - last_heartbeat > HEARTBEAT_S:
+                    # Log even when nothing changes. Without this a long walk
+                    # holding one correction goes silent for tens of seconds,
+                    # which is exactly the window in which a runaway is
+                    # invisible in the logs afterwards (2026-08-19).
+                    last_heartbeat = time.monotonic()
+                    logger.info(
+                        f"walk_straight: cycle "
+                        f"{control.gait_cycles - started_cycles}/{cycles}, heading "
+                        f"{error:+.1f}deg off line, holding steer {applied:+d}"
+                    )
         finally:
             # A zero-stride CMD_MOVE is the single-shot branch: it returns the
             # feet to the resting footprint and clears the queue, so the gait
@@ -625,10 +662,17 @@ class Hardware:
             f", battery {battery[0]:.2f}V/{battery[1]:.2f}V" if battery else ""
         )
         mode = "measured uncorrected" if measuring_only else f"{corrections} steering correction(s)"
+        ran = control.gait_cycles - started_cycles
+        gyro_health = tracker.health()
+        measured = getattr(control, "last_cycle_s", 0.0)
+        timing = (
+            f", {measured:.2f}s per cycle measured vs {cycle_s:.2f}s estimated"
+            if measured else ""
+        )
         return (
-            f"walk_straight {outcome}: {direction} {cycles} cycles at speed {speed}, "
+            f"walk_straight {outcome}: {direction} {ran}/{cycles} cycles at speed {speed}, "
             f"final heading error {final_error:+.1f}deg (worst {worst_error:.1f}deg), "
-            f"{mode}{unknown}{battery_txt}{still_note}"
+            f"{mode}{unknown}{timing}{battery_txt}{still_note}. {gyro_health}"
         )
 
     def motion_refusal(self, tool_name: str, args: dict) -> Optional[str]:
@@ -756,6 +800,7 @@ def main() -> None:
                             args.get("cycles", 3),
                             args.get("speed", 6),
                             args.get("heading"),
+                            args.get("gain"),
                         )
                     )
                     node.send_output(

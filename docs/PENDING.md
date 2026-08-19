@@ -9,10 +9,9 @@ tells you something.
 
 ## Active
 
-- [IN-FLIGHT 2026-08-19] **Movement improvement programme, items 2-7.** Item 1 (gyro
-  heading-hold walking) shipped and is verified — CHANGELOG 2026-08-19. The remaining six,
-  in the order agreed: (2) measure the real gait cycle duration instead of estimating it, so
-  `walk` travels the distance it was asked for; (3) closed-loop approach on the ultrasonic
+- [IN-FLIGHT 2026-08-19] **Movement improvement programme, items 3-7.** Items 1 (gyro
+  heading-hold walking) and 2 (counted gait cycles) have shipped and are verified on
+  hardware — CHANGELOG 2026-08-19. The remaining five, in the order agreed: (3) closed-loop approach on the ultrasonic
   ("walk forward until 20cm from the obstacle"); (4) ramp stance transitions instead of
   jumping height and footprint in one command; (5) smooth the swing-leg trajectory in
   `run_gait`, which currently assigns full 40mm lift in a single 10ms frame; (6) cache servo

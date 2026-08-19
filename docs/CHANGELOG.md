@@ -7,6 +7,96 @@ revert an old entry.
 
 ---
 
+## 2026-08-19 — A walk now runs the gait cycles it was asked for, and the gyro stopped inventing rotations that drove the robot into a real spin
+
+Two pieces of work that turned out to be one story: making distance honest exposed a
+measurement bug that had been quietly corrupting the heading control shipped earlier the same
+day.
+
+### Cycles are counted, not timed
+
+`walk` used to queue a gait command, sleep for `steps` x an *estimated* cycle duration, then
+queue a stop. The estimate counts `run_gait`'s 10ms-per-frame sleep and ignores the 18 servo
+writes each frame also spends on the I2C bus. Measured on hardware, it is wrong by a factor of
+**3.2 at every speed**: speed 3 estimates 1.18s and takes 3.87s, speed 6 estimates 0.79s and
+takes 2.54s, speed 9 estimates 0.40s and takes 1.20s. So every walk was running roughly a
+third of the cycles it claimed, and the shortfall varied with speed — the same command
+travelled different distances at different speeds.
+
+**Fix:** `Control` now counts what it does. `gait_cycles` counts completed cycles and
+`last_cycle_s` records how long the last one took; both are written only by `run_gait`, and the
+zero-stride "stop and stand" form is deliberately not counted so the number stays a count of
+cycles *travelled*. `walk` and `walk_straight` wait on that counter instead of on a stopwatch.
+Verified on hardware: 6/6, 6/6, 6/6, 18/18 and turns of 1, 3 and 4 cycles, all exact.
+
+**Fix:** `steps` now works for turns at all. A turn has x=0,y=0, which is the *single-shot*
+branch in `condition_monitor` — one cycle, then the queue is cleared — and nothing re-queued
+it, so every turn command ran exactly one cycle no matter what was asked. This is the
+mechanism behind the 2026-08-18 note that 23 commanded cycles produced about 5 real ones.
+
+**Decision:** the stop is queued during the *final* cycle rather than after it. `run_gait`
+only re-reads the queue between cycles, so a stop queued after the Nth cycle completed let an
+N+1th start, and every walk overshot by a full stride.
+
+### The gyro was inventing rotation, and the heading controller believed it
+
+The odometry run surfaced a robot that walked an L-shaped path while being told to walk
+backwards in a straight line. The log showed the heading estimate jumping **+79deg in one
+second** — impossible for a walking hexapod — after which the controller held maximum steering
+correction for **25 seconds** and rotated the robot through roughly 170deg. The controller was
+working correctly; it was fed a measurement that was not.
+
+**Fix:** the gyro read is now a single atomic I2C transaction. `mpu6050.read_i2c_word` reads
+the high byte and the low byte as two *separate* transactions, and the device updates its
+registers at 1kHz underneath, so the word can tear across a sample boundary — taking the high
+byte from one sample and the low byte from the next. Torn across the sign bit that yields a
+near-full-scale value. A gait cycle issues ~1800 servo writes a second on the same bus, which
+makes the window between those two reads both wide and frequent. `YawTracker._read_dps` now
+does a two-byte block read, which is one transaction and cannot tear. (The driver's own method
+is left alone; it is used by `get_gyro_data` at rates where this does not bite.)
+
+**Fix:** the integrator no longer multiplies one instantaneous rate sample by an arbitrarily
+long stall. A read delayed 300ms by bus contention used to contribute up to 75deg of phantom
+yaw from a single sample; a stalled sample is now credited with one normal sample's worth of
+time. Samples above 150deg/s are rejected outright as saturation or corruption, since the
+robot never rotates that fast. Replaying one identical sample stream, the old integrator
+accumulated **-283.8deg** of rotation that never happened where the new one accumulates
+**+0.1deg**. On hardware the same 18-cycle backward walk went from a worst excursion of
+169.5deg to 7.5deg, with 0 bad samples out of 10,701.
+
+**Fix:** every `YawTracker` now reports its own health — samples taken, samples rejected, read
+errors, stalled reads clamped, worst sampling gap — and every walk result carries that line.
+A measurement subsystem that cannot say how much it threw away is not observable.
+
+### The heading-hold experiment had been measuring nothing
+
+**Fix:** `walk_straight`'s `gain` argument was dropped in tool dispatch — the test node sent
+it, `hardware_node` never read it. So the "uncorrected" baseline legs ran *corrected*, and the
+2026-08-19 heading-hold entry's comparison was invalid; both runs had honestly reported
+"NO BETTER" because both legs were identical. With the argument passed through, the real
+numbers are **14.9deg of drift uncorrected against 3.5deg corrected** over 6 cycles each way,
+a 4.3x improvement. The test node now refuses a baseline leg that does not come back marked
+"measured uncorrected", so an experiment cannot silently measure nothing again.
+
+**Fix:** the steering loop logged only when the correction changed, so a walk holding one
+correction went silent — the 25-second window in which the runaway happened produced no log
+output at all. It now emits a heartbeat every 3 seconds regardless.
+
+New files: `nodes/odometry_test_node.py` and `dataflow-odometry.yml` (`./run.sh odometry`),
+which walks the same cycle count at three speeds with pauses for marking the floor, on the
+principle that the distance question should be settleable with a ruler and no trust in any
+number the robot reports.
+
+Plain-language summary: the robot was told to take six steps and took two, because it was
+counting with a stopwatch that ran three times too fast rather than counting the steps
+themselves. It now counts steps. While testing that, we caught something worse: the sensor
+that tells the robot which way it is facing was occasionally returning nonsense, because its
+reading is assembled from two separate messages and the robot's own leg movements were
+crowding the wire between them. The robot believed one of those nonsense readings, concluded
+it had spun most of the way round, and turned hard to "correct" — which is why it walked an L
+shape across the floor. The reading is now fetched in one piece, and obviously impossible
+values are thrown away rather than believed.
+
 ## 2026-08-19 — Walking now holds its heading on the gyro, and the robot visibly stops wandering off course
 
 Added `walk_straight`, a closed-loop version of `walk` that measures the robot's rotation
