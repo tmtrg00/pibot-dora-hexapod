@@ -7,6 +7,97 @@ revert an old entry.
 
 ---
 
+## 2026-08-19 — A servo lead pulled out mid-testing; the legs check out and the robot stands again
+
+A servo lead came out of its connector while the movement graphs were being run, leaving
+several legs out of sync. The I2C bus was checked first and all four devices answered — both
+PCA9685 drivers at 0x40 and 0x41, the ADC at 0x48, the IMU at 0x68 — so the driver boards were
+never in question and the fault was mechanical at the connector. The pack read 6.76V under
+load, above the floor, so it was safe to drive servos.
+
+New `test/servo_recover.py`. It differs from the existing `test/diagnose_servos.py` in the
+three ways that matter when a robot is already in an unknown state: it reads the battery with
+the servo rail ON and refuses below the floor, because the unloaded reading is about a volt
+optimistic; it relaxes first and waits, so leads can be re-seated and legs placed by hand
+before anything is energised; and it drives one joint at a time rather than commanding all
+thirty-two servos to a pose the instant it starts. Each of the eighteen leg joints gets a small
+sweep and the operator says whether it moved — there is no position feedback on these servos,
+so that is the only way the question can be answered.
+
+**Decision:** `--stand` computes the standing pose by running the robot's own inverse
+kinematics with the servo swapped for a recorder, rather than reimplementing it. The IK is the
+one piece of this codebase that must not be duplicated, and a maintenance script is exactly
+where a second copy would go unnoticed. Verified offline before it drove anything: 18 joints,
+all inside servo travel, perfectly mirrored left to right.
+
+**Fix:** the tool documents `./bin/py` rather than `./venv/bin/python`, and RUNBOOKS §1 now
+explains why. The venv is untracked, so a git worktree — which is where this branch is being
+tested — has none of its own, and the documented command failed outright. `run.sh` already fell
+back to the main checkout's venv; `bin/py` is the equivalent for a plain script.
+
+**Fix:** `--stand` ran the full joint-by-joint check before standing, because the flag was left
+out of the condition that skips it.
+
+Outcome: the joints were exercised, the robot reached the reference pose with its legs even,
+and `--stand` put it back on its feet correctly. No servo was found dead, so the lead had
+simply been re-seated.
+
+Plain-language summary: a servo's plug came out while testing and some legs ended up at the
+wrong angles. There is now a tool that checks the electrics first, refuses to move anything on
+a low battery, lets you re-plug the lead with the motors switched off, then wiggles each of the
+eighteen leg joints in turn so you can see which one is not answering. It finishes by standing
+the robot back up. The robot is fine.
+
+## 2026-08-19 — Movement programme verified on the robot, and both closed loops recentred on what the hardware measured
+
+Second hardware pass, after the turn and approach fixes. Both graphs ran clean and the owner
+confirmed both looked right. What the logs then showed was not a fault but a bias, in each
+case the same one: a loop that converges reliably but consistently a little short.
+
+`smoothturn` completed all 8 turns (11/11 steps) where the previous run aborted at the first,
+with **no rocking at the end of any turn** — the hunting is gone. Worst residual 5.0deg against
+a 5.0deg tolerance. But every single turn undershot: -4.9, -4.4, -5.0, -3.9, +2.5, -3.8, -1.0,
+-2.7, accumulating to **-23.2deg over eight turns**. Four quarter-turns left the robot about
+18deg short of where it started, which is inside spec per turn and visible as a heading error
+by the end.
+
+`approach` stopped at 29.7cm for a 25cm target — 4.7cm over — while reporting it had measured
+**8.9cm per gait cycle**, where 17 cycles covering roughly 107cm makes the true figure about
+6.2cm. Heading drift was **+0.6deg**, down from +10.2deg on the previous run, confirming the
+one-second gyro bias calibration was the fix for that.
+
+**Decision:** the turn planner rounds again rather than truncating. Truncation was introduced
+earlier the same day to stop the hunting, on the reasoning that undershooting is safer than
+overshooting into a reversal. With the stop rule now ending the turn as soon as it lands inside
+tolerance, the hunting cannot recur from rounding alone — and truncation was the source of the
+systematic undershoot. Measured against the range this robot actually occupies (2.6-3.3deg per
+angle unit): a 90deg turn improves from -4.2deg to -0.9deg and a 180deg turn from -5.1deg to
+-1.8deg, still with zero reversals anywhere in the sweep.
+
+**Fix:** the opening cycle is planned for a third of the target rather than half. Rounding
+reintroduced one overshoot — a 20deg turn on a robot rotating 5.0deg per unit against a 3.3
+seed went 10deg past — because the first cycle is committed before any measurement exists and
+half of a short target is already most of it. A third bounds that, costs nothing on a large
+turn where it still saturates the steering angle, and brings every case in the sweep to within
+tolerance: the 20deg turns now land within 1.1deg on every simulated robot.
+
+**Fix:** the approach averages its travel-per-cycle over the whole approach instead of a
+rolling two-cycle window. A short window still carries most of the sensor's noise, which is
+what produced 8.9cm against a real 6.2cm and stopped the robot 4.7cm early. Total distance
+over total cycles cannot be fooled that way and only steadies as the approach runs.
+
+Also seen and worth recording: the approach's retreat leg reported "already 136.6cm away,
+needed no movement" and moved nothing, which is the correct response — the sensor was reading
+past the obstacle by then. The retreat path therefore remains unexercised on hardware. And the
+pack reached 6.24V at its lowest during these runs, close enough to the 6.0V floor to be worth
+charging before the next session.
+
+Plain-language summary: the robot now turns smoothly and walks up to things and stops, and both
+were confirmed on the real robot. Both were also landing slightly short every time — the turn
+by about 4 degrees and the approach by about 5cm — because each was deliberately erring on the
+cautious side. Now that neither can overshoot into a wobble, that caution has been removed, and
+both aim at the target rather than just short of it.
+
 ## 2026-08-19 — The approach stopped 7cm short of every target, because its stop lead was measuring sensor noise
 
 First hardware run of `approach`. It walked smoothly to the obstacle and back, but the numbers

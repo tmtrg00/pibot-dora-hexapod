@@ -549,7 +549,7 @@ class Hardware:
             opposite direction, and alternating between the two is precisely
             the hunting this loop must not do.
             """
-            magnitude = max(1, min(8, int(abs(remaining) / max(per_unit, 0.5))))
+            magnitude = max(1, min(8, int(round(abs(remaining) / max(per_unit, 0.5)))))
             return magnitude if remaining > 0 else -magnitude
 
         # Planning happens at CYCLE BOUNDARIES and predicts one cycle ahead,
@@ -567,13 +567,13 @@ class Hardware:
         # of the currently running cycle, because every change is queued a full
         # cycle before it takes effect.
         deadline = time.monotonic() + abs(target) / max(per_unit, 1.0) * cycle_s * 4 + 30.0
-        # Plan the opening cycle for only half the target. Until a cycle has
+        # Plan the opening cycle for only a third of the target. Until a cycle has
         # been measured, `per_unit` is a seed from another surface on another
         # day, and the first cycle is committed before any measurement exists
         # to correct it — a seed 65% low would overshoot a small turn outright.
         # Halving bounds that, and costs nothing on a large turn, where half
         # the target still saturates the maximum steering angle.
-        applied = plan(target / 2.0)
+        applied = plan(target / 3.0)
         angle_running = applied
         outcome = "reached tolerance"
         turned_right = 0.0
@@ -1113,14 +1113,18 @@ class Hardware:
         # target, and 7.1cm short backing off to 50cm (2026-08-19). Distance
         # covered divided by cycles run is the same quantity with the noise
         # averaged out over seconds instead of milliseconds.
+        # Averaged over the WHOLE approach, not a rolling two-cycle window. A
+        # short window still carries most of the sensor's noise: the first run
+        # with a windowed estimate read 8.9cm per cycle where the robot was
+        # really covering about 6.2, and stopped 4.7cm early as a result.
+        # Total distance over total cycles cannot be fooled that way, and it
+        # only gets steadier the longer the approach runs.
         if state.mark_cm is None:
             state.mark_cm, state.mark_cycles = filtered, cycles
         elif cycles - state.mark_cycles >= 2:
-            travelled = abs(filtered - state.mark_cm)
-            per_cycle = travelled / (cycles - state.mark_cycles)
+            per_cycle = abs(filtered - state.mark_cm) / (cycles - state.mark_cycles)
             if 0.5 <= per_cycle <= 15.0:
                 state.travel_cm_per_cycle = per_cycle
-            state.mark_cm, state.mark_cycles = filtered, cycles
 
         state.lead_cm = state.travel_cm_per_cycle
         predicted = (
