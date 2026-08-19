@@ -9,14 +9,27 @@ tells you something.
 
 ## Active
 
-- [TODO 2026-08-19] **Re-check turn and approach accuracy after the recentring.** The movement
-  programme is verified on hardware (CHANGELOG 2026-08-19) — turning is continuous, the
-  approach stops itself, roll and pitch tilt the right axes, the stance resets when idle. Both
-  closed loops were then recentred because each landed consistently short: the turn by about
-  4deg per turn, accumulating to -23.2deg over eight, and the approach by 4.7cm. Those changes
-  are simulated only. `./run.sh smoothturn` should now accumulate far less than -23deg over its
-  eight turns, and `./run.sh approach` should stop within a couple of cm of target, measured
-  with a tape. Neither is a blocker; both are quality.
+- [TODO 2026-08-19] **`turn_to` overshoots its target by about 4deg, every time.** Measured over
+  two hardware runs, both directions, every turn size: +90 asked gave 93.1 / 94.7 / 93.7 / 95.8,
+  +/-180 gave 184.8 and 185.3, +/-20 gave 23.7 and 25.2. Turning itself is smooth and the
+  hunting is gone — this is accuracy, not behaviour, and it is not a blocker. The cause is not
+  established: the robot rotates further after the stop decision than the cycle in flight should
+  deliver, which could be the per-angle-unit estimate reading low, the body settling once the
+  gait stops, or the gyro integrating through the set-down. Get that data before changing
+  anything — the last two changes to this loop were made on inference and one was wrong
+  (CHANGELOG 2026-08-19, the correction entry).
+
+  Three options, in increasing cost: revert `plan()` from rounding to truncating, which restores
+  the better 5.0deg worst case for a one-line change; add a deliberate stop margin of about 4deg,
+  which should centre it but is a constant fitted to two runs; or plan the endgame in smaller
+  cycles so the final one carries less rotation and its prediction error is proportionally
+  smaller, which costs two or three extra cycles per turn.
+
+- [TODO 2026-08-19] **Re-check approach accuracy after the travel-per-cycle change.** The
+  approach was changed to average its travel-per-cycle over the whole approach rather than a
+  two-cycle window, after the first run stopped 4.7cm over target while reporting 8.9cm per cycle
+  where the true figure was about 6.2. That change is simulated only — `./run.sh approach` has
+  not run since. It should stop within a couple of cm of target, measured with a tape.
 
 - [SHELVED 2026-08-19] **The approach's retreat path has never run on hardware.** Both attempts
   ended with the sensor reading past the obstacle ("already 136.6cm away, needed no movement"),
