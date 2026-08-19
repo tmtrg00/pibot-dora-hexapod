@@ -16,7 +16,16 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE"
 
-export PATH="$HERE/venv/bin:$PATH"
+# The venv is not tracked, so a git worktree checkout has none of its own.
+# Fall back to the main checkout's venv rather than failing, which is what lets
+# a branch be tested on the real robot without cloning a second environment.
+VENV="$HERE/venv"
+if [[ ! -x "$VENV/bin/dora" && -x "/opt/pibot-dora/venv/bin/dora" ]]; then
+  VENV="/opt/pibot-dora/venv"
+  echo "no venv in $HERE — using $VENV"
+fi
+
+export PATH="$VENV/bin:$PATH"
 
 case "${1:-full}" in
   full|"")  DATAFLOW="dataflow.yml" ;;
@@ -27,6 +36,7 @@ case "${1:-full}" in
   stance)   DATAFLOW="dataflow-stance.yml" ;;
   stancewalk) DATAFLOW="dataflow-stancewalk.yml" ;;
   crabwalk) DATAFLOW="dataflow-crabwalk.yml" ;;
+  straightwalk) DATAFLOW="dataflow-straightwalk.yml" ;;
   *)        DATAFLOW="$1" ;;
 esac
 
@@ -47,7 +57,7 @@ fi
 
 # Refuse to start on top of a previous run's orphans — they own the hardware
 # this graph is about to ask for.
-if pgrep -f "$HERE/venv/bin/python nodes/" >/dev/null; then
+if pgrep -f "$VENV/bin/python nodes/" >/dev/null; then
   echo "Nodes from a previous run are still alive; cleaning up first."
   ./stop.sh
 fi
@@ -59,4 +69,4 @@ echo "dataflow : $DATAFLOW"
 echo "project  : $HERE"
 echo
 
-"$HERE/venv/bin/dora" run "$DATAFLOW"
+"$VENV/bin/dora" run "$DATAFLOW"

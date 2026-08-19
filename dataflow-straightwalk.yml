@@ -1,0 +1,35 @@
+# Straight-walk graph. LOCOMOTION: the robot travels forward and back, twice
+# per round — once with heading hold off (the baseline) and once with it on —
+# and reports the drift for each so the two can be compared directly.
+#
+# Needs a couple of metres of clear floor ahead. Lay a line of tape under the
+# robot and watch it against the tape: the gyro's number and your eye should
+# agree.
+#
+#   ./run.sh straightwalk                             baseline vs corrected
+#   PIBOT_STRAIGHT_COMPARE=0 ./run.sh straightwalk    corrected only
+#   PIBOT_STRAIGHT_CYCLES=10 ./run.sh straightwalk    longer run, more drift
+#   PIBOT_HEADING_GAIN=0.2 ./run.sh straightwalk      firmer steering
+
+nodes:
+  - id: hardware
+    path: bin/py
+    args: nodes/hardware_node.py
+    inputs:
+      tick: dora/timer/millis/1000
+      tool_call: straight_walk/tool_call
+    outputs:
+      - battery
+      - health
+      - tool_result
+
+  - id: straight_walk
+    path: bin/py
+    args: nodes/straight_walk_test_node.py
+    inputs:
+      tick: dora/timer/millis/250
+      tool_result: hardware/tool_result
+      battery: hardware/battery
+      health: hardware/health
+    outputs:
+      - tool_call

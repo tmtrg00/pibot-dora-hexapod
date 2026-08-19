@@ -7,6 +7,64 @@ revert an old entry.
 
 ---
 
+## 2026-08-19 — Walking now holds its heading on the gyro, and the robot visibly stops wandering off course
+
+Added `walk_straight`, a closed-loop version of `walk` that measures the robot's rotation
+while the gait is running and trims it out by folding a small steering angle into the next
+cycle. Verified on hardware by the owner, who reported noticeably less fragmentation in
+forward and backward movement.
+
+The mechanism rests on a property of the gait engine found by reading it rather than by
+changing it: a `CMD_MOVE` carrying a non-zero stride is **continuous** in
+`Control.condition_monitor` — the command queue is not cleared, so `run_gait` is re-entered
+cycle after cycle and re-reads `command_queue` each time. Re-queueing the same command with a
+different `angle` therefore steers the very next cycle, with no stop, no pose change and no
+edit to `src/control.py`. This is the same "compose on the existing engine" approach the
+stance and closed-loop turn work used.
+
+**Decision:** the steering controller is PI, not P, and that was not the first design. Pure
+proportional steering was simulated across every plausible drift (0.5-5deg per cycle) and
+steering response (2-7deg per angle unit) and settled at a *constant* 21-38deg error rather
+than converging. The reason is that the gait's bias enters the loop as a rate disturbance at
+the same point as the control, so proportional control needs standing error to generate the
+standing correction that cancels it — the textbook `drift / (gain x response)` residual. An
+integral term supplies that correction on its own. Both gains were then swept against the
+simulated plant and set to 0.12 with an integral ratio of 0.40, which holds the worst settled
+error to about 6deg across the whole range where open-loop would reach 80deg. The reasoning
+lives in the `HeadingHold` docstring, because a future reader would otherwise reasonably see
+the integrator as an unnecessary complication on a plant that already looks like an integrator.
+
+**Fix:** the gyro's sign convention is now learned once and remembered in
+`data/gyro_sense.json` instead of being rediscovered per command. Nothing in the drivers says
+which way the MPU6050 is mounted, so "does yaw read positive when the robot turns right" is an
+empirical fact about this particular robot; `turn_to` already measured it and threw it away
+every run. Both commands now record it, `PIBOT_GYRO_YAW_SIGN` overrides it, and a corrupt or
+missing file reads as "unknown" rather than crashing. When the sign is unknown `walk_straight`
+learns it from a deliberate one-unit steer, and if that probe fails to move the gyro within 6
+seconds it gives up, straightens the steer and finishes the walk open-loop with a warning —
+rather than holding a correction forever on the strength of a measurement that never arrived.
+
+New files: `nodes/heading.py` (the `YawTracker` moved out of `hardware_node.py` so turning and
+walking share one instrument, plus the sign persistence and the controller),
+`nodes/straight_walk_test_node.py` and `dataflow-straightwalk.yml` (`./run.sh straightwalk`).
+The test graph walks the same distance twice per round — once with the steering gain forced to
+zero, once at the tuned gain — so the before-and-after comparison runs through the identical
+code path with the identical instrumentation and exactly one variable changed, and prints a
+verdict line. It opens with two small `turn_to` probes, which both establish the gyro sign and
+prove the IMU responds before any heading number from it is trusted.
+
+**Fix:** `run.sh` now falls back to the main checkout's venv when the directory it is run from
+has none. The venv is untracked, so a git worktree — which is how this branch was developed —
+previously could not run any graph at all.
+
+Plain-language summary: the robot used to wander off course when told to walk forward, because
+it moves by pushing all six legs back together and they never grip quite equally. It had no
+idea this was happening. Now it watches its own rotation with the spinning-motion sensor it
+already carried, notices when it has turned away from the line it was told to follow, and
+steers gently back — the same way you would correct a supermarket trolley that pulls to one
+side. It also now remembers which way that sensor counts, instead of working it out from
+scratch every single time.
+
 ## 2026-08-19 — Deleted src/server.py, the unused Freenove TCP control holdover, and trimmed the comments that named it
 
 Removed `src/server.py` (9 KB), the Freenove video/command TCP server carried over wholesale

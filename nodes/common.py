@@ -130,6 +130,7 @@ TOOL_OWNER: Dict[str, str] = {
     "get_battery": "hardware",
     "set_stance": "hardware",
     "turn_to": "hardware",
+    "walk_straight": "hardware",
     "set_led": "led",
     "buzz": "buzzer",
     "get_distance": "ultrasonic",
@@ -148,6 +149,7 @@ MOTION_TOOLS = {
     "move_head",
     "set_stance",
     "turn_to",
+    "walk_straight",
 }
 
 
@@ -213,6 +215,57 @@ def turn_tool_schema() -> Dict[str, Any]:
                     },
                 },
                 "required": ["degrees"],
+            },
+        },
+    }
+
+
+def walk_straight_tool_schema() -> Dict[str, Any]:
+    """OpenAI tool schema for walk_straight, appended to the upstream TOOLS list.
+
+    `walk` stays as the open-loop primitive — it is the right tool for a short
+    shuffle or a deliberate arc. `walk_straight` is the accurate version:
+    the gyro measures the drift while the gait runs and trims it out, so the
+    robot ends up pointing the way it started.
+    """
+    return {
+        "type": "function",
+        "function": {
+            "name": "walk_straight",
+            "description": (
+                "Walk in a straight line, holding heading closed-loop on the "
+                "gyro. More accurate than walk(), which drifts off course. Use "
+                "this whenever the robot should end up pointing the same way it "
+                "started, or should travel along a line."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "direction": {
+                        "type": "string",
+                        "enum": ["forward", "backward", "left", "right"],
+                        "description": (
+                            "Travel direction; left/right are sideways crab "
+                            "walking, not turns."
+                        ),
+                    },
+                    "cycles": {
+                        "type": "integer",
+                        "description": "Gait cycles to walk (1-20). Roughly 3-4cm each.",
+                    },
+                    "speed": {
+                        "type": "integer",
+                        "description": "Gait speed (2-10). Higher is faster.",
+                    },
+                    "heading": {
+                        "type": "number",
+                        "description": (
+                            "Line to hold, in degrees relative to the starting "
+                            "heading (-45..45). Default 0, straight ahead."
+                        ),
+                    },
+                },
+                "required": ["direction"],
             },
         },
     }

@@ -25,7 +25,6 @@ from __future__ import annotations
 import math
 import os
 import sys
-import threading
 import time
 from typing import Optional, Tuple
 
@@ -44,6 +43,12 @@ from common import (
 common.bootstrap()
 
 import stances  # noqa: E402
+from heading import (  # noqa: E402
+    HeadingHold,
+    YawTracker,
+    load_yaw_sign,
+    save_yaw_sign,
+)
 
 from dora import Node  # noqa: E402
 from src.actions import execute as run_action  # noqa: E402
@@ -76,77 +81,39 @@ TURN_SEED_DEG_PER_ANGLE_UNIT = 4.5
 TURN_TOLERANCE_DEG = 5.0
 TURN_SPEED = int(os.environ.get("PIBOT_TURN_SPEED", "6"))
 
-# MPU6050 z-gyro, read raw: one I2C word per sample instead of the seven
-# transactions get_gyro_data() spends, because the sampler shares the bus with
-# ~1800 servo writes/s while the gait runs.
-GYRO_Z_REG = 0x47
-GYRO_LSB_PER_DPS = 131.0  # the 250deg/s range src/imu.py configures
+# Heading-hold walking. The steering loop samples yaw and re-queues the gait
+# command with a trimmed angle this often. Shorter than one gait cycle on
+# purpose: `run_gait` picks up whatever angle is queued when it starts its next
+# cycle, so sampling faster than the cycle means the freshest correction is
+# always the one that gets applied.
+STEER_INTERVAL_S = 0.35
+
+# How far the stride goes in each direction, mirroring `walk` in src/actions.py
+# so both open- and closed-loop walking travel the same distance per cycle.
+WALK_STRIDE_MM = 35
+
+# The steering angle used to learn the gyro's sign when this robot has never
+# been measured. Small: it is a deliberate curve that the heading loop then has
+# to take back out.
+SIGN_PROBE_ANGLE = 1
+SIGN_PROBE_MIN_DEG = 2.0
+SIGN_PROBE_TIMEOUT_S = 6.0
 
 
-class YawTracker:
-    """Integrates the z gyro into a yaw angle while the robot turns.
+def cycle_duration_estimate(gait: int, speed: int) -> float:
+    """How long one gait cycle is expected to take, in seconds.
 
-    Yaw from gyro integration drifts, but a turn lasts tens of seconds and the
-    bias is measured immediately beforehand with the robot standing still, so
-    the drift over one turn is well under the stopping tolerance. The AHRS in
-    src/imu.py would do no better here: with no magnetometer its yaw is the
-    same integration, just harder to reason about.
+    Mirrors `_estimated_cycle_duration` in src/actions.py: `run_gait` runs F
+    frames with a 10ms sleep in each, where F comes from the same speed
+    mapping. It is an estimate — the 18 servo writes per frame take real bus
+    time that this does not count — so anything that needs the true duration
+    should measure it rather than trust this.
     """
-
-    def __init__(self, sensor) -> None:
-        self.sensor = sensor
-        self.bias_dps = 0.0
-        self._yaw_deg = 0.0
-        self._running = False
-        self._thread: Optional[threading.Thread] = None
-        self._lock = threading.Lock()
-
-    def _read_dps(self) -> float:
-        return self.sensor.read_i2c_word(GYRO_Z_REG) / GYRO_LSB_PER_DPS
-
-    def calibrate(self, seconds: float = 1.0) -> Tuple[float, float]:
-        """Measure gyro bias at rest. Returns (bias deg/s, sample spread deg/s)."""
-        samples = []
-        end = time.monotonic() + seconds
-        while time.monotonic() < end:
-            samples.append(self._read_dps())
-            time.sleep(0.005)
-        self.bias_dps = sum(samples) / len(samples)
-        return self.bias_dps, max(samples) - min(samples)
-
-    def start(self) -> None:
-        self._yaw_deg = 0.0
-        self._running = True
-        self._thread = threading.Thread(target=self._integrate, daemon=True)
-        self._thread.start()
-
-    def _integrate(self) -> None:
-        last = time.monotonic()
-        while self._running:
-            try:
-                dps = self._read_dps() - self.bias_dps
-            except Exception:
-                # One bad bus transaction mid-gait is survivable; a dead
-                # sampler thread would silently freeze the yaw estimate, so
-                # keep the loop alive and let the next sample land.
-                time.sleep(0.01)
-                last = time.monotonic()
-                continue
-            now = time.monotonic()
-            with self._lock:
-                self._yaw_deg += dps * (now - last)
-            last = now
-            time.sleep(0.005)
-
-    def yaw(self) -> float:
-        with self._lock:
-            return self._yaw_deg
-
-    def stop(self) -> float:
-        self._running = False
-        if self._thread is not None:
-            self._thread.join(timeout=1.0)
-        return self.yaw()
+    if gait == 1:
+        frames = round((22 - 126) * (speed - 2) / (10 - 2) + 126)
+    else:
+        frames = round((45 - 171) * (speed - 2) / (10 - 2) + 171)
+    return max(0.2, (frames * 0.01) + 0.05)
 
 
 class Hardware:
@@ -429,6 +396,16 @@ class Hardware:
                     # (progress is 0 until sense is known), so whatever yaw
                     # sign it produced is, by definition, the sign of progress.
                     sense = 1.0 if delta > 0 else -1.0
+                    # `sense` is relative to the target's direction; the
+                    # convention worth remembering is the absolute one — which
+                    # way yaw runs for a commanded RIGHT turn. Persist it so
+                    # heading-hold walking does not have to rediscover it.
+                    canonical = sense * (1.0 if angle > 0 else -1.0)
+                    if save_yaw_sign(canonical, "turn_to"):
+                        logger.info(
+                            f"turn_to: learned gyro yaw sign {canonical:+.0f} "
+                            f"(positive yaw = turning right) and saved it"
+                        )
                 # Blend toward the measured per-angle-unit rate; one noisy
                 # cycle should not swing the plan hard.
                 measured_unit = abs(delta) / magnitude
@@ -446,6 +423,212 @@ class Hardware:
             f"(residual {target - signed_achieved:+.1f}deg) in {steps_done} gait cycle(s), "
             f"measured {per_unit:.1f}deg per angle unit, "
             f"gyro bias {bias:+.2f}deg/s{battery_txt}{note}"
+        )
+
+    def walk_straight(self, direction, cycles, speed, heading=None, gain=None) -> str:
+        """Walk in a straight line, holding heading closed-loop on the z gyro.
+
+        `walk` displaces all six feet by the same stride each cycle, which is
+        straight only if every leg slips equally. They do not, so an open-loop
+        walk arcs — by a few degrees per cycle, in a direction that changes
+        with surface, calibration and battery state. Here the gyro measures the
+        drift while the gait runs and a small steering angle is folded into the
+        next cycle to take it back out.
+
+        Why this can steer without interrupting the walk: a CMD_MOVE with a
+        non-zero stride is *continuous* in `condition_monitor` — the queue is
+        not cleared, so `run_gait` is re-entered cycle after cycle, re-reading
+        `command_queue` each time. Re-queueing the same command with a
+        different angle therefore steers the very next cycle, with no stop and
+        no pose change in between.
+
+        `heading` is the line to hold, in degrees relative to where the robot
+        is pointing when the command starts; the default of 0 is "straight
+        ahead from here". `gain` overrides the steering gain, and a gain of 0
+        measures the drift without correcting it — which is how the test graph
+        gets an honest open-loop baseline through the identical code path.
+        Blocks this node's event loop for the whole walk, exactly as `walk` and
+        `turn_to` already do.
+        """
+        stride = {
+            "forward": (0, WALK_STRIDE_MM),
+            "backward": (0, -WALK_STRIDE_MM),
+            "left": (-WALK_STRIDE_MM, 0),
+            "right": (WALK_STRIDE_MM, 0),
+        }.get(str(direction).strip().lower())
+        if stride is None:
+            return (
+                f"walk_straight: unknown direction {direction!r}; use forward, "
+                f"backward, left or right (turning is turn_to's job)"
+            )
+        x, y = stride
+
+        try:
+            cycles = max(1, min(20, int(cycles)))
+        except (TypeError, ValueError):
+            cycles = 3
+        try:
+            speed = max(2, min(10, int(speed)))
+        except (TypeError, ValueError):
+            speed = 6
+        try:
+            target = float(heading) if heading is not None else 0.0
+        except (TypeError, ValueError):
+            target = 0.0
+        target = max(-45.0, min(45.0, target))
+
+        control = self.control
+        cycle_s = cycle_duration_estimate(1, speed)
+        duration = cycle_s * cycles
+        # The steering loop samples faster than the gait cycles; tell the
+        # controller how much of a cycle each sample covers so its integrator
+        # is tuned in cycles, not in whatever interval this node happens to use.
+        dt_cycles = STEER_INTERVAL_S / cycle_s
+
+        # Stand first: a walk started from a slumped pose drags feet, and the
+        # gyro bias measurement below needs a motionless robot.
+        run_action("stand", {}, self.hardware_dict)
+
+        tracker = YawTracker(control.imu.sensor)
+        bias, spread = tracker.calibrate(1.0)
+        still_note = (
+            "" if spread <= 8.0
+            else f" (gyro spread {spread:.1f}deg/s during calibration — robot was not still)"
+        )
+
+        sign = load_yaw_sign()
+        try:
+            gain_value = float(gain) if gain is not None else None
+        except (TypeError, ValueError):
+            gain_value = None
+        controller = HeadingHold() if gain_value is None else HeadingHold(gain=gain_value)
+        measuring_only = gain_value == 0.0
+        logger.info(
+            f"walk_straight: {direction} {cycles} cycles at speed {speed}, "
+            f"holding {target:+.1f}deg, gyro bias {bias:+.2f}deg/s, "
+            f"sign {'unknown — will learn' if sign is None else f'{sign:+.0f}'}"
+            + (", gain 0 — MEASURING ONLY, no correction" if measuring_only else "")
+        )
+
+        def queue(angle: int) -> None:
+            control.command_queue = [
+                cmd.CMD_MOVE, "1", str(x), str(y), str(speed), str(angle)
+            ]
+            control.timeout = time.time()
+
+        applied = 0
+        corrections = 0
+        worst_error = 0.0
+        outcome = "completed"
+        probe_started = None
+        probe_until = 0.0
+
+        tracker.start()
+        queue(0)
+        started = time.monotonic()
+        last_battery_check = time.time()
+        try:
+            while time.monotonic() - started < duration:
+                time.sleep(STEER_INTERVAL_S)
+
+                # Re-read the pack mid-walk: a long walk is exactly where a
+                # marginal pack sags below the floor, and stopping late means
+                # stopping by browning out.
+                if time.time() - last_battery_check > 2.0:
+                    last_battery_check = time.time()
+                    self.read_battery(force=True)
+                    refusal = self.motion_refusal("walk", {})
+                    if refusal is not None:
+                        outcome = f"aborted: {refusal}"
+                        break
+
+                if sign is None and not measuring_only:
+                    # Never measured on this robot: steer gently one way and
+                    # watch which way yaw moves. That is the whole calibration,
+                    # and it happens once in the robot's life. Skipped when
+                    # only measuring, because deliberately curving a baseline
+                    # walk would corrupt the very number it exists to produce.
+                    if probe_started is None:
+                        probe_started = tracker.yaw()
+                        probe_until = time.monotonic() + SIGN_PROBE_TIMEOUT_S
+                        applied = SIGN_PROBE_ANGLE
+                        queue(applied)
+                        continue
+                    moved = tracker.yaw() - probe_started
+                    if abs(moved) < SIGN_PROBE_MIN_DEG:
+                        if time.monotonic() < probe_until:
+                            continue
+                        # The probe steered and the gyro barely moved, so the
+                        # sign cannot be trusted. Straighten up and finish the
+                        # walk open-loop rather than holding a steer forever on
+                        # the strength of a measurement that never arrived.
+                        applied = 0
+                        queue(applied)
+                        measuring_only = True
+                        logger.warning(
+                            f"walk_straight: sign probe moved only {moved:+.1f}deg in "
+                            f"{SIGN_PROBE_TIMEOUT_S:.0f}s — giving up on heading hold, "
+                            f"walking OPEN-LOOP. Is the gyro responding?"
+                        )
+                        continue
+                    sign = 1.0 if moved > 0 else -1.0
+                    save_yaw_sign(sign, "walk_straight")
+                    logger.info(
+                        f"walk_straight: learned gyro yaw sign {sign:+.0f} "
+                        f"from a {moved:+.1f}deg probe and saved it"
+                    )
+
+                if sign is None:
+                    # Measuring only, on a robot whose sign is not yet known.
+                    # The magnitude of the drift is still exactly right; only
+                    # which way it leans is unknown, and the summary says so.
+                    continue
+
+                error = tracker.yaw() * sign - target
+                worst_error = max(worst_error, abs(error))
+                wanted = controller.steer(error, dt_cycles)
+                if wanted != applied:
+                    applied = wanted
+                    corrections += 1
+                    queue(applied)
+                    logger.info(
+                        f"walk_straight: heading {error:+.1f}deg off line, "
+                        f"steering {applied:+d}"
+                    )
+        finally:
+            # A zero-stride CMD_MOVE is the single-shot branch: it returns the
+            # feet to the resting footprint and clears the queue, so the gait
+            # actually stops rather than running on after this method returns.
+            control.command_queue = [cmd.CMD_MOVE, "1", "0", "0", str(speed), "0"]
+            control.timeout = time.time()
+            end = time.time() + 15.0
+            while time.time() < end:
+                queue_now = getattr(control, "command_queue", None)
+                if isinstance(queue_now, list) and queue_now and queue_now[0] == "":
+                    break
+                time.sleep(0.05)
+            final_yaw = tracker.stop()
+
+        if sign is not None:
+            final_error = final_yaw * sign - target
+            unknown = ""
+        else:
+            # Sign unresolved: the drift magnitude is measured correctly, we
+            # just cannot say which way it leans. Report the magnitude rather
+            # than a zero that would read as a perfect walk.
+            final_error = abs(final_yaw - target)
+            unknown = " (gyro sign unknown — magnitude only, direction not known)"
+        worst_error = max(worst_error, abs(final_error))
+
+        battery = self.last_battery
+        battery_txt = (
+            f", battery {battery[0]:.2f}V/{battery[1]:.2f}V" if battery else ""
+        )
+        mode = "measured uncorrected" if measuring_only else f"{corrections} steering correction(s)"
+        return (
+            f"walk_straight {outcome}: {direction} {cycles} cycles at speed {speed}, "
+            f"final heading error {final_error:+.1f}deg (worst {worst_error:.1f}deg), "
+            f"{mode}{unknown}{battery_txt}{still_note}"
         )
 
     def motion_refusal(self, tool_name: str, args: dict) -> Optional[str]:
@@ -555,6 +738,34 @@ def main() -> None:
                                 "name": name,
                                 "text": text,
                                 "refused": refusal is not None,
+                            }
+                        ),
+                    )
+                    continue
+
+                # walk_straight, like turn_to, is served here rather than by
+                # src/actions.py: it needs the IMU and re-steers between gait
+                # cycles, both of which live on this side of the boundary.
+                if name == "walk_straight":
+                    refusal = hw.motion_refusal(name, args)
+                    text = (
+                        refusal
+                        if refusal is not None
+                        else hw.walk_straight(
+                            args.get("direction", "forward"),
+                            args.get("cycles", 3),
+                            args.get("speed", 6),
+                            args.get("heading"),
+                        )
+                    )
+                    node.send_output(
+                        "tool_result",
+                        encode(
+                            {
+                                "id": call.get("id"),
+                                "name": name,
+                                "text": text,
+                                "refused": refusal is not None or "aborted" in text,
                             }
                         ),
                     )
