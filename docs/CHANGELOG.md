@@ -7,6 +7,50 @@ revert an old entry.
 
 ---
 
+## 2026-08-19 — Closed the camera investigation as failed: this camera works on neither Ubuntu nor Raspberry Pi OS, so we will try a different camera type
+
+Closing the camera out of PENDING and stopping the investigation. Per the owner (2026-08-19),
+this camera **does not work on either Raspberry Pi OS or Ubuntu**, and the plan going forward is
+to try a **different type of camera** in the future rather than continue debugging this one.
+
+**Decision: this supersedes the 2026-08-17 finding "The camera works on Raspberry Pi OS: the
+board is fine, the RMA conclusion was wrong, and the fault is in Ubuntu's camera stack."** That
+entry rested on the camera capturing successfully under Raspberry Pi OS on this board, which was
+the load-bearing fact behind framing the fault as Ubuntu-specific packaging. The owner reports
+the camera does not in fact work under Raspberry Pi OS either, which removes that anchor: the
+OS-swap direction the PENDING entry offered no longer has a proven-good target, so it is off the
+table. The 2026-08-17 entry itself is left intact and unedited, as the append-only rule requires
+— the trail "we believed Pi OS worked, then found it did not" is the useful record.
+
+**Decision: do not switch the Pi to Raspberry Pi OS for the camera.** The sole reason to move
+was that Pi OS was believed to capture on this hardware; with that no longer true, there is no
+camera reason to leave Ubuntu 26.04.
+
+The earlier hardware-fault retraction (2026-08-17, "do not buy a cable, a camera module or a
+board") is **not** reversed by this. That retraction was about not replacing individual links in
+*this* camera's chain on the strength of the zero-packet evidence; the path forward here is a
+**different camera type** altogether, which is a new component choice, not an RMA of the current
+one. No purchase of a replacement cable/module/board for the existing camera is implied.
+
+**What stays true:** the control plane works end to end on Ubuntu while the data plane carries
+no frames; the media pipeline is complete and correctly formatted; and userspace, the CFE
+driver, vendor libcamera, the DTB and the CSI IOMMU binding are all eliminated as causes
+(CHANGELOG 2026-08-17). None of that work is wasted — it bounds where the next camera has to
+behave differently.
+
+**Impact — still blocked, now deferred rather than active:** vision-guided obstacle avoidance,
+the autonomous observation loop, streaming camera frames as Arrow buffers, and the
+responsiveness comparison that MASTERPLAN makes the definition of success all remain blocked,
+now waiting on a different camera rather than on debugging this one. The `camera` node needs no
+change. Moved the corresponding PENDING items into the deferred section, gated on new hardware.
+
+Plain-language summary: we've given up on getting the current Pi Camera to produce pictures — it
+refuses to work under both operating systems we tried, so it isn't an Ubuntu quirk after all.
+We're not buying more parts for this camera; instead we'll try a different kind of camera later.
+Everything that needed the robot to see — avoiding obstacles, looking around on its own, and the
+head-to-head speed test that was meant to prove the whole project worthwhile — is on hold until
+that new camera arrives.
+
 ## 2026-08-17 — Merged the parallel camera investigation and retracted its hardware verdict: do not buy a cable, a camera module or a board
 
 Merged `origin/main`, which carried a parallel investigation from 2026-08-16 that this branch
