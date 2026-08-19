@@ -174,6 +174,7 @@ class Approach:
         "started_at", "samples", "last_at", "last_cm", "closing_rate", "tracker",
         "controller", "yaw_sign", "applied", "corrections", "worst_cm", "lead_cm",
         "walking", "last_steer_at", "last_battery_at",
+        "travel_cm_per_cycle", "mark_cm", "mark_cycles",
     )
 
     def __init__(self, call_id, stop_cm, speed, direction, max_cycles,
@@ -202,6 +203,13 @@ class Approach:
         self.walking = False
         self.last_steer_at = time.monotonic()
         self.last_battery_at = 0.0
+        # How far the robot actually travels per gait cycle, measured. Seeded
+        # from the stride, then learned — the same approach the turn takes to
+        # degrees-per-angle-unit, and for the same reason: the nominal figure
+        # is geometry, and what the robot does on this floor is not.
+        self.travel_cm_per_cycle = WALK_STRIDE_MM / 10.0
+        self.mark_cm = None
+        self.mark_cycles = 0
 
     def satisfied(self, predicted_cm: float) -> bool:
         """Has the target been reached, in whichever direction is being asked?
@@ -1033,7 +1041,7 @@ class Hardware:
         run_action("stand", {}, self.hardware_dict)
 
         tracker = YawTracker(control.imu.sensor)
-        tracker.calibrate(0.6)
+        tracker.calibrate(1.0)
         tracker.start()
 
         self.approach = Approach(
@@ -1096,18 +1104,35 @@ class Hardware:
         # The gait cannot be interrupted mid-cycle: a stop queued now takes
         # effect at the next cycle boundary, and the robot keeps moving until
         # then. So decide on where it will BE at that boundary, not where it is.
-        # `closing_rate` is signed — positive while closing, negative while
-        # opening — so this one expression leads correctly in both directions.
-        cycle_s = getattr(self.control, "last_cycle_s", 0.0) or cycle_duration_estimate(
-            1, state.speed
+        #
+        # The lead is one cycle of travel, MEASURED. Deriving it from a
+        # sample-to-sample closing rate did not work on the robot: the HC-SR04
+        # is noisy enough that a rate taken over 200ms is dominated by that
+        # noise, and the resulting lead ran to 7.7cm where a cycle covers about
+        # 3.5cm — so the first hardware run stopped 6.9cm short of a 25cm
+        # target, and 7.1cm short backing off to 50cm (2026-08-19). Distance
+        # covered divided by cycles run is the same quantity with the noise
+        # averaged out over seconds instead of milliseconds.
+        if state.mark_cm is None:
+            state.mark_cm, state.mark_cycles = filtered, cycles
+        elif cycles - state.mark_cycles >= 2:
+            travelled = abs(filtered - state.mark_cm)
+            per_cycle = travelled / (cycles - state.mark_cycles)
+            if 0.5 <= per_cycle <= 15.0:
+                state.travel_cm_per_cycle = per_cycle
+            state.mark_cm, state.mark_cycles = filtered, cycles
+
+        state.lead_cm = state.travel_cm_per_cycle
+        predicted = (
+            filtered - state.lead_cm if state.direction == "forward"
+            else filtered + state.lead_cm
         )
-        predicted = filtered - state.closing_rate * cycle_s
-        state.lead_cm = abs(predicted - filtered)
         if state.satisfied(predicted):
             return self.finish_approach(
                 f"reached {filtered:.1f}cm from the obstacle "
                 f"(target {state.stop_cm:.0f}cm, stopped {state.lead_cm:.1f}cm early "
-                f"to allow for the cycle in flight)"
+                f"for the cycle in flight, measured {state.travel_cm_per_cycle:.1f}cm "
+                f"per cycle)"
             )
         return None
 

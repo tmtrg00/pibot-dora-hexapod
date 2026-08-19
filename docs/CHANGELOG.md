@@ -7,6 +7,36 @@ revert an old entry.
 
 ---
 
+## 2026-08-19 — The approach stopped 7cm short of every target, because its stop lead was measuring sensor noise
+
+First hardware run of `approach`. It walked smoothly to the obstacle and back, but the numbers
+were wrong in a consistent way: it stopped at 31.9cm for a 25cm target and at 42.9cm for a 50cm
+target backing off — about 7cm short in both directions, and it reported allowing a 7.7cm lead
+for the cycle in flight when a whole gait cycle only covers about 3.5cm.
+
+**Fix:** the lead is now one cycle of travel, measured as distance covered divided by gait
+cycles run, rather than derived from a sample-to-sample closing rate. The HC-SR04 is noisy
+enough that a rate taken over the 200ms between readings is dominated by that noise, and the
+lead inherited it — so the robot stopped early by roughly the size of the noise rather than by
+the distance it was actually about to cover. Dividing distance by cycles averages the same
+quantity over seconds instead of milliseconds, and is the same trick the turn uses to learn its
+degrees-per-angle-unit. Simulated against a sensor with up to +/-2.5cm of noise, the stop lands
+within 1.5cm of target in both directions, and the noise no longer moves it at all.
+
+**Fix:** the approach calibrates gyro bias for a full second like `walk_straight`, not 0.6s.
+The first run drifted 10.2deg of heading over 11 cycles where a straight walk holds 3.5deg, and
+a hurried bias measurement is the most likely reason.
+
+**Fix:** `test/servo_recover.py --stand` ran the whole joint-by-joint check first. The flag was
+not included in the condition that skips it, so asking to stand up meant sitting through
+eighteen sweeps. It now goes straight to the pose.
+
+Plain-language summary: told to stop 25cm from a wall, the robot stopped at 32cm. It was
+braking too early because it estimated its own speed from two distance readings taken a fifth
+of a second apart, and the sensor's own jitter over that gap looked like speed. It now works
+out how far it travels per step by watching over several steps, which the jitter averages out
+of.
+
 ## 2026-08-19 — The continuous turn stopped dancing around its target, and a tool to find a pulled servo lead
 
 First hardware run of the continuous turn. The owner reported it "turned 90 degrees very

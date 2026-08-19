@@ -214,7 +214,7 @@ def main():
     legs = LEGS if not args.leg else [LEGS[args.leg - 1]]
     dead = []
 
-    if not args.rest:
+    if not (args.rest or args.stand):
         print("\n=== 3. joint-by-joint check ===")
         print("  Each joint moves on its own. Watch that ONE joint and answer.")
         print("  A joint that does not move at all is the unplugged or failed one.\n")
