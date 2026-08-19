@@ -28,12 +28,6 @@ tells you something.
   Watch particularly for `rpi_ws281x` (SPI LEDs) and `lgpio` under the new kernel, neither of
   which an import test can exercise.
 
-- [TODO 2026-08-16] **Copy `.env` into this project.** The fork carried `src/`, `config/` and
-  the calibration but not the secrets, so `OPENAI_API_KEY` and `PICOVOICE_ACCESS_KEY` are
-  missing and the full graph cannot run. Sensor, motion, turn and stance graphs are unaffected.
-  `cp /opt/pibot-hexapod/.env /opt/pibot-dora/.env && chmod 600 /opt/pibot-dora/.env`
-  (RUNBOOKS §8).
-
 - [TODO 2026-08-16] **Verify the full autonomous graph end to end.** Four of the eight nodes
   have never run against real hardware: `audio`, `llm`, `brain` and `buzzer`. The wake word,
   Whisper, GPT-4o, tool dispatch, TTS and barge-in path is entirely unproven. `buzzer` is the

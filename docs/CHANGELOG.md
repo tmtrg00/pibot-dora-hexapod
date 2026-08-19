@@ -7,6 +7,35 @@ revert an old entry.
 
 ---
 
+## 2026-08-19 — Copied .env from PiBot-Hexapod into /opt/pibot-dora, so the full autonomous graph now has its API keys
+
+Copied the secrets file the fork never carried: `cp /opt/pibot-hexapod/.env /opt/pibot-dora/.env
+&& chmod 600 /opt/pibot-dora/.env` (RUNBOOKS §8). The two original projects share this
+filesystem, so this was a local copy.
+
+**Fix:** `OPENAI_API_KEY` and `PICOVOICE_ACCESS_KEY` are now present at the project root, which
+unblocks the full graph's dependency on them (GPT-4o/Whisper/TTS and the Porcupine wake word).
+Verified functionally, not just by file existence: `find_dotenv()` from the project root
+resolves `/opt/pibot-dora/.env` and both keys load non-empty (164 and 56 chars). Values were
+never printed. The file is `0600` and `.env` is gitignored (`.gitignore:17`), so no secret is
+tracked — consistent with the no-credential-values rule.
+
+The inherited file also carries `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY` and `GROQ_API_KEY`, left
+in place and harmless: no code in this project reads them (the old kitchen-sink providers are
+gone, same clean-up as the requirements rewrite above). The location is `/opt/pibot-dora/.env`,
+the runtime root that `bin/py`, the venv and `PIBOT_HOME` all default to; `nodes/common.py`
+`bootstrap()` chdirs there before any node calls `load_dotenv()`.
+
+**Still not done:** this only supplies the keys. The full autonomous graph remains unverified
+end to end — `audio`, `llm`, `brain` and `buzzer` have still never run against real hardware
+(separate PENDING item), and that needs a charged pack and accepts API spend.
+
+Plain-language summary: the robot's brain needs passwords to reach OpenAI (for speech and
+thinking) and Picovoice (for the "Hey Pi Bot" wake word). Those were left behind when this
+project split off from the old one. We copied them across from the old project on the same
+machine and confirmed the software can read them. The talking-and-listening part of the robot
+can now start — though nobody has yet run it against the real hardware to see it work.
+
 ## 2026-08-19 — Rewrote requirements.txt to the 11 packages the code actually imports, dropping the 90-line inherited freeze
 
 Replaced the inherited `requirements.txt` — a 90-line freeze carried over from PiBot-Hexapod
