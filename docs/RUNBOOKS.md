@@ -188,6 +188,46 @@ sensor. It needs the ultrasonic node in the graph — the hardware node subscrib
 PIBOT_APPROACH_STOP_CM=30 ./run.sh approach
 ```
 
+### A servo lead came out, or a leg looks wrong
+
+The driver boards are almost never the problem — check the bus first, and if all four devices
+answer, the fault is mechanical:
+
+```bash
+i2cdetect -y 1        # expect 0x40 0x41 (servo drivers), 0x48 (ADC), 0x68 (IMU), 0x70 (all-call)
+```
+
+Then walk the joints one at a time. This reads the battery with the servo rail ON and refuses
+below the floor, relaxes first so leads can be re-seated by hand, and moves a single joint at
+a time so a dead one can be identified by watching:
+
+```bash
+./venv/bin/python test/servo_recover.py          # check every joint, then rest pose
+./venv/bin/python test/servo_recover.py --leg 3  # one leg only
+./venv/bin/python test/servo_recover.py --rest   # skip the check, just go to rest pose
+./venv/bin/python test/servo_recover.py --relax  # torque off and exit
+```
+
+**Stand the robot on a box so its legs hang free before running it.** Legs that are out of
+sync can tip it over on the first move.
+
+It finishes at the reference pose — coxa and femur at 90deg, right-side tibias at 10deg and
+left-side at 170deg. Every leg should then mirror its opposite number. A leg that does not has
+a horn seated at the wrong angle on its spline: unscrew it, re-seat it so the leg matches, and
+screw it back. No calibration can correct that in software — `point.txt` is all zeros on this
+robot, so nothing is compensating for a slipped horn.
+
+Channels 0-15 are on the `0x41` board, 16-31 on `0x40`. Leg map:
+
+| leg | coxa | femur | tibia | tibia rest |
+|-----|------|-------|-------|------------|
+| 1 front right | 15 | 14 | 13 | 10° |
+| 2 mid right   | 12 | 11 | 10 | 10° |
+| 3 rear right  |  9 |  8 | 31 | 10° |
+| 4 rear left   | 22 | 23 | 27 | 170° |
+| 5 mid left    | 19 | 20 | 21 | 170° |
+| 6 front left  | 16 | 17 | 18 | 170° |
+
 ---
 
 ## §6 Camera

@@ -7,6 +7,71 @@ revert an old entry.
 
 ---
 
+## 2026-08-19 — The continuous turn stopped dancing around its target, and a tool to find a pulled servo lead
+
+First hardware run of the continuous turn. The owner reported it "turned 90 degrees very
+quickly and smoothly (i liked it) and then sort of started dancing". The log shows exactly
+that: the turn reached 89.0deg of a 90deg target — a 1.0deg residual — and then alternated its
+steering angle -1, +1, -1 around the target until the stall guard aborted the run at step 1
+of 8.
+
+**Fix:** the turn now stops as soon as the cycle in flight is predicted to land inside
+tolerance. It previously continued whenever one more cycle promised a closer landing, which
+never terminates on real hardware: the smallest correction the gait can make is one angle
+unit, about 2.7deg, which is the same size as the residual being chased — so each cycle
+overshot and the next was planned to come back. That rule was added the same day to avoid a
+simulated turn finishing 4.8deg short. It traded an invisible 4.8deg residual for a visible
+oscillation, which was the wrong way round: tolerance is the contract, not a target to beat.
+
+**Fix:** the planner truncates rather than rounds when sizing a cycle, so a cycle is more
+likely to fall just short of the rotation remaining than to overshoot it. Overshoot has to be
+undone by a cycle in the other direction, and alternating between the two is the hunting
+itself.
+
+**Fix:** the opening cycle is planned for only half the target. Until one cycle has been
+measured, the degrees-per-angle-unit figure is a seed from another surface on another day, and
+the first cycle is committed before any measurement exists to correct it — a seed 65% low
+overshot a 20deg turn outright in simulation. Halving bounds that and costs nothing on a large
+turn, where half the target still saturates the maximum steering angle.
+
+**Fix:** a turn samples yaw every 0.08s rather than every 0.35s. The loop can only notice a
+gait cycle boundary at its next sample, so every measurement of "how far did that cycle turn
+us" was late by up to one interval and included that much of the *next* cycle's rotation. That
+is a systematic over-estimate, not noise — 14% at the old interval — and an over-estimate makes
+the turn believe it has further to go than it has, so it stops short. Worst simulated error
+across a 2.5x range of robot responsiveness fell from 10.0deg to 5.0deg against a 5deg
+tolerance, with zero reversals anywhere.
+
+**Fix:** the stop no longer cancels a cycle that has not started. `gait_cycles` is incremented
+at the end of a cycle, a moment before `condition_monitor` re-reads the queue for the next one;
+stopping inside that window replaced the queued angle with the stop and the cycle never ran,
+costing a simulated 90deg turn its final 10deg. The prediction now ignores a cycle until the
+window has passed.
+
+**Fix:** the stall guard misdiagnosed the hunting as "the gait is not turning the body". It
+compared rotation against a fixed 1deg threshold, but a deliberate 1-unit trim near the target
+only moves the body about 3deg, and two of those in a row look like a stall. It now compares
+against the rotation the commanded angle *should* have produced.
+
+New `test/turn_settles.py` — an offline regression check that drives the real `turn_to` against
+a simulated robot and counts reversals, because "did it land accurately" was never the question
+that mattered here; "did it stop" was.
+
+New `test/servo_recover.py`, after a servo lead pulled out during testing and left some legs out
+of sync. It reads the battery with the servo rail ON and refuses below the floor, relaxes and
+waits so connectors can be re-seated by hand, then moves ONE JOINT AT A TIME so a dead or
+mis-seated servo can be identified by watching, and finishes at the reference pose where every
+leg should mirror its opposite number. It differs from the existing `test/diagnose_servos.py`
+in exactly those respects: that one drives all 32 servos to the reference pose the instant it
+starts, with no battery check, which is not what to do to a robot whose legs are already out of
+sync.
+
+Plain-language summary: the robot turned the right amount and then fidgeted back and forth
+instead of stopping, because it kept trying to shave off the last degree with a correction that
+was itself bigger than a degree. It now accepts "close enough" and stops. Separately, a servo
+came unplugged during testing, so there is now a tool that checks each of the eighteen leg
+joints one at a time and tells you which one is not responding.
+
 ## 2026-08-19 — Turning made continuous, obstacle approach closed on the ultrasonic, and the gait's foot placement, servo traffic and attitude axes all fixed
 
 The rest of the movement programme, implemented and smoke-tested offline in one pass.

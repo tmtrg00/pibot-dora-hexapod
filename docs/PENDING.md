@@ -20,6 +20,23 @@ tells you something.
   the two whose verdict only a person watching can give: roll must tip the robot side to side
   and pitch nose up and down, and each turn must be one continuous rotation.
 
+  First hardware pass done 2026-08-19: the turn, attitude and approach graphs all behaved, and
+  the turn's hunting was found and fixed from that run (CHANGELOG). Still to confirm on the
+  robot: the turn fix itself (`./run.sh smoothturn` now runs all 8 turns instead of aborting at
+  the first), and `./run.sh idlereset`, which the owner ran but could not tell what it did —
+  use `PIBOT_IDLE_STANCE_RESET_S=8 PIBOT_IDLE_WATCH_S=25` and watch for the robot standing back
+  up on its own about 8s into step 1b.
+
+- [TODO 2026-08-19] **A servo lead pulled out during testing; confirm the legs are all sound.**
+  Happened while running the movement graphs on 2026-08-19. The I2C bus was checked immediately
+  afterwards and all four devices answer (0x40, 0x41, 0x48, 0x68), so the driver boards are
+  fine and the fault is mechanical at the connector — plus, possibly, a servo horn that slipped
+  on its spline, which no amount of software can correct. `test/servo_recover.py` walks each of
+  the eighteen leg joints one at a time to find a joint that does not move, and finishes at the
+  reference pose where every leg should mirror its opposite number. Until that has been run and
+  come back clean, treat any odd movement as a mechanical fault before suspecting the gait
+  changes made the same day.
+
 - [TODO 2026-08-16] **Verify the full autonomous graph end to end.** Four of the eight nodes
   have never run against real hardware: `audio`, `llm`, `brain` and `buzzer`. The wake word,
   Whisper, GPT-4o, tool dispatch, TTS and barge-in path is entirely unproven. `buzzer` is the

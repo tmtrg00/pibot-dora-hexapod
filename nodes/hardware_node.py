@@ -81,6 +81,16 @@ TURN_SEED_DEG_PER_ANGLE_UNIT = 3.3
 TURN_TOLERANCE_DEG = 5.0
 TURN_SPEED = int(os.environ.get("PIBOT_TURN_SPEED", "6"))
 
+# How often a turn samples yaw. Shorter than the heading-hold interval on
+# purpose. A turn measures its own degrees-per-angle-unit by watching how far
+# the body moved over one gait cycle, and it can only notice a cycle boundary
+# at its next sample — so every measurement is late by up to one interval and
+# includes that much of the NEXT cycle's rotation. That is a systematic
+# over-estimate of the cycle's effect, not noise: at 0.35s against a 2.46s
+# cycle it inflated the estimate by 14%, and an inflated estimate makes the
+# turn believe it has further to go than it has, so it stops short.
+TURN_POLL_S = 0.08
+
 # Heading-hold walking. The steering loop samples yaw and re-queues the gait
 # command with a trimmed angle this often. Shorter than one gait cycle on
 # purpose: `run_gait` picks up whatever angle is queued when it starts its next
@@ -523,8 +533,15 @@ class Hardware:
             control.timeout = time.time()
 
         def plan(remaining: float) -> int:
-            """Steering angle for the rotation still to go, signed."""
-            magnitude = max(1, min(8, int(round(abs(remaining) / max(per_unit, 0.5)))))
+            """Steering angle for the rotation still to go, signed.
+
+            Truncates rather than rounds, so a cycle is more likely to fall
+            just short of the remaining rotation than to overshoot it. That
+            matters because overshooting has to be undone by a cycle in the
+            opposite direction, and alternating between the two is precisely
+            the hunting this loop must not do.
+            """
+            magnitude = max(1, min(8, int(abs(remaining) / max(per_unit, 0.5))))
             return magnitude if remaining > 0 else -magnitude
 
         # Planning happens at CYCLE BOUNDARIES and predicts one cycle ahead,
@@ -542,11 +559,18 @@ class Hardware:
         # of the currently running cycle, because every change is queued a full
         # cycle before it takes effect.
         deadline = time.monotonic() + abs(target) / max(per_unit, 1.0) * cycle_s * 4 + 30.0
-        applied = plan(target)
+        # Plan the opening cycle for only half the target. Until a cycle has
+        # been measured, `per_unit` is a seed from another surface on another
+        # day, and the first cycle is committed before any measurement exists
+        # to correct it — a seed 65% low would overshoot a small turn outright.
+        # Halving bounds that, and costs nothing on a large turn, where half
+        # the target still saturates the maximum steering angle.
+        applied = plan(target / 2.0)
         angle_running = applied
         outcome = "reached tolerance"
         turned_right = 0.0
         boundary_turned = 0.0
+        boundary_at = 0.0
         cycles_seen = control.gait_cycles
         last_battery_check = time.time()
         last_heartbeat = time.monotonic()
@@ -557,7 +581,7 @@ class Hardware:
         queue(applied)
         try:
             while True:
-                time.sleep(STEER_INTERVAL_S)
+                time.sleep(TURN_POLL_S)
                 now = time.monotonic()
                 raw_yaw = tracker.yaw()
 
@@ -590,29 +614,39 @@ class Hardware:
                 still_coming = (
                     max(0.0, outstanding) if angle_running > 0 else min(0.0, outstanding)
                 )
+                # Only count the cycle in flight once it has definitely begun.
+                # `gait_cycles` is incremented at the END of a cycle, a moment
+                # BEFORE condition_monitor re-reads the queue for the next one,
+                # so immediately after a boundary there is a window in which the
+                # next cycle has not picked up its angle. Stopping inside that
+                # window replaces the queued angle with the stop and the cycle
+                # never runs at all — which cost a 90deg turn its last 10deg
+                # (2026-08-19). Assume nothing more is coming until the window
+                # has passed; one sample later the prediction is trustworthy.
+                if now - boundary_at < TURN_POLL_S:
+                    still_coming = 0.0
                 predicted_end = turned_right + still_coming
-                error_if_stopped = abs(target - predicted_end)
-                if error_if_stopped <= tol:
-                    # Stopping is allowed — but only take it if it is at least
-                    # as good as running one more cycle. Stopping at the first
-                    # merely-acceptable moment made turns finish early and
-                    # wide: a 90deg turn halted with the in-flight cycle
-                    # predicted 4.8deg short, when the cycle already planned
-                    # would have landed 1.2deg short. "Within tolerance" is the
-                    # contract, not the goal.
-                    next_angle = plan(target - predicted_end)
-                    error_if_continued = abs(
-                        target - (predicted_end + next_angle * per_unit)
+                if abs(target - predicted_end) <= tol:
+                    # Inside tolerance: stop. Do not try to do better.
+                    #
+                    # An earlier version continued whenever one more cycle
+                    # promised a closer landing. On the robot that never
+                    # terminated: the smallest correction the gait can make is
+                    # about one angle unit, ~2.7deg, which is the same size as
+                    # the residual being chased, so each cycle overshot and the
+                    # next was planned to come back. Observed 2026-08-19 — a
+                    # 90deg turn arrived at 89.0deg and then alternated -1, +1,
+                    # -1 around the target, which the owner described as the
+                    # robot dancing, until the stall guard aborted it.
+                    #
+                    # Tolerance is the contract. Landing 4deg out and stopping
+                    # is invisible; hunting for 1deg is not.
+                    logger.info(
+                        f"turn_to: stopping — the cycle in flight lands "
+                        f"{target - predicted_end:+.1f}deg from target, inside the "
+                        f"{tol:.0f}deg tolerance"
                     )
-                    if error_if_stopped <= error_if_continued:
-                        # run_gait reads the queue when a cycle begins, so the
-                        # stop lands exactly at the end of the one in flight.
-                        logger.info(
-                            f"turn_to: stopping — the cycle in flight lands "
-                            f"{target - predicted_end:+.1f}deg from target, and another "
-                            f"cycle would only make it {error_if_continued:.1f}deg"
-                        )
-                        break
+                    break
 
                 if now > deadline:
                     outcome = f"stopped on a timeout with {remaining:+.1f}deg still to go"
@@ -659,12 +693,19 @@ class Hardware:
                     if 1.0 <= estimate <= 12.0:
                         per_unit = estimate
 
-                if abs(moved) < 1.0:
+                # A stall is a cycle that rotated far less than the angle it
+                # was given should have produced — not merely a small rotation.
+                # A deliberate 1-unit trim near the target moves the body about
+                # 3deg, and judging that on an absolute threshold reported the
+                # gait as broken when it was working correctly (2026-08-19).
+                expected = abs(angle_running) * per_unit
+                if expected > 0.5 and abs(moved) < 0.3 * expected:
                     stalled_cycles += 1
                     if stalled_cycles >= 2:
                         outcome = (
-                            f"aborted: two consecutive cycles rotated under 1deg "
-                            f"({moved:+.2f}deg last) — the gait is not turning the body"
+                            f"aborted: two consecutive cycles rotated far less than "
+                            f"commanded ({moved:+.2f}deg where {expected:.1f}deg was "
+                            f"expected) — the gait is not turning the body"
                         )
                         break
                 else:
@@ -675,7 +716,14 @@ class Hardware:
                 # before changing it, so the prediction above stays honest for
                 # the rest of this cycle.
                 angle_running = applied
+                boundary_at = now
                 short_by = target - (turned_right + applied * per_unit)
+                if abs(short_by) <= tol:
+                    # The cycle that just started already lands inside
+                    # tolerance. Leave the queue alone and let the stop check
+                    # above end the turn — planning another cycle here is what
+                    # produced the reversal that read as the robot dancing.
+                    continue
                 wanted = plan(short_by)
                 if wanted != applied:
                     applied = wanted
