@@ -15,6 +15,14 @@ depends on how the stance phase accumulates, so it is measured instead:
   PIBOT_TURN_DEG_PER_CYCLE=16 ./run.sh turn
                                           having measured, ask for a full 360
 
+Closed-loop mode (PIBOT_TURN_CLOSED_LOOP=1) hands the whole rotation to the
+hardware node's turn_to tool instead: the hardware node integrates the gyro,
+segments the turn itself and re-plans from measured rotation, so no
+DEG_PER_CYCLE figure is needed and the result reports the residual error.
+This node then just sends one tool call and waits.
+
+  PIBOT_TURN_CLOSED_LOOP=1 PIBOT_TURN_DEGREES=90 ./run.sh turn
+
 Env:
   PIBOT_TURN_CYCLES          total gait cycles to run (calibration mode)
   PIBOT_TURN_DEG_PER_CYCLE   measured degrees per cycle; sets cycles for 360
@@ -22,6 +30,8 @@ Env:
   PIBOT_TURN_DIRECTION       turn_right (default) or turn_left
   PIBOT_TURN_SEGMENT         cycles per walk call, default 5, max 10
   PIBOT_TURN_ABORT_V         abort below this load voltage, default 4.9
+  PIBOT_TURN_CLOSED_LOOP     1 = one turn_to call closed on the gyro
+  PIBOT_TURN_TOLERANCE       closed-loop stop tolerance in degrees, default 5
 """
 
 from __future__ import annotations
@@ -61,7 +71,13 @@ DEG_PER_CYCLE = os.environ.get("PIBOT_TURN_DEG_PER_CYCLE")
 # target rotation using the measured figure.
 CALIBRATION_CYCLES = os.environ.get("PIBOT_TURN_CYCLES")
 
+CLOSED_LOOP = os.environ.get("PIBOT_TURN_CLOSED_LOOP", "").lower() in {"1", "true", "yes"}
+TOLERANCE = float(os.environ.get("PIBOT_TURN_TOLERANCE", "5"))
+
 STEP_TIMEOUT_S = 40.0
+# A single turn_to call covers the whole rotation plus a stand at each end;
+# budget generously rather than aborting a healthy turn.
+TURN_TO_TIMEOUT_S = 300.0
 SETTLE_S = 1.2
 
 
@@ -79,32 +95,47 @@ def planned_cycles() -> tuple:
 
 def main() -> None:
     node = Node()
-    total_cycles, description = planned_cycles()
 
-    segments = []
-    remaining = total_cycles
-    while remaining > 0:
-        take = min(SEGMENT, remaining)
-        segments.append(take)
-        remaining -= take
-
-    logger.info(
-        f"turn test: {DIRECTION}, {description}, "
-        f"{len(segments)} segment(s) of up to {SEGMENT} cycles, abort below {ABORT_V:.2f}V"
-    )
-
-    # stand first, then the segments, then stand and relax.
-    steps = [("stand neutral", "stand", {})]
-    for i, count in enumerate(segments):
-        steps.append(
-            (
-                f"turn segment {i + 1}/{len(segments)} ({count} cycles)",
-                "walk",
-                {"direction": DIRECTION, "steps": count, "speed": SPEED},
-            )
+    if CLOSED_LOOP:
+        # The hardware node owns the whole rotation: gyro integration,
+        # segmenting, re-planning and the battery checks between segments.
+        signed = TARGET_DEGREES if DIRECTION == "turn_right" else -TARGET_DEGREES
+        total_cycles = 0
+        logger.info(
+            f"turn test (closed loop): turn_to {signed:+.0f}deg, "
+            f"tolerance {TOLERANCE:.1f}deg, abort below {ABORT_V:.2f}V"
         )
-    steps.append(("stand neutral", "stand", {}))
-    steps.append(("relax servos", "relax", {"enabled": True}))
+        steps = [
+            (f"turn_to {signed:+.0f}deg", "turn_to", {"degrees": signed, "tolerance": TOLERANCE}),
+            ("relax servos", "relax", {"enabled": True}),
+        ]
+    else:
+        total_cycles, description = planned_cycles()
+
+        segments = []
+        remaining = total_cycles
+        while remaining > 0:
+            take = min(SEGMENT, remaining)
+            segments.append(take)
+            remaining -= take
+
+        logger.info(
+            f"turn test: {DIRECTION}, {description}, "
+            f"{len(segments)} segment(s) of up to {SEGMENT} cycles, abort below {ABORT_V:.2f}V"
+        )
+
+        # stand first, then the segments, then stand and relax.
+        steps = [("stand neutral", "stand", {})]
+        for i, count in enumerate(segments):
+            steps.append(
+                (
+                    f"turn segment {i + 1}/{len(segments)} ({count} cycles)",
+                    "walk",
+                    {"direction": DIRECTION, "steps": count, "speed": SPEED},
+                )
+            )
+        steps.append(("stand neutral", "stand", {}))
+        steps.append(("relax servos", "relax", {"enabled": True}))
 
     index = -1
     pending_id = None
@@ -176,7 +207,8 @@ def main() -> None:
         elif event["id"] == "tick":
             now = time.time()
             if pending_id is not None:
-                if now - sent_at > STEP_TIMEOUT_S:
+                step_timeout = TURN_TO_TIMEOUT_S if steps[index][1] == "turn_to" else STEP_TIMEOUT_S
+                if now - sent_at > step_timeout:
                     logger.warning("    no result within timeout")
                     results.append((steps[index][0], "no result within timeout", False))
                     abort("a step did not complete in time")
@@ -203,7 +235,7 @@ def main() -> None:
         )
     if aborted:
         logger.warning("Run was ABORTED - the robot was stood up and relaxed.")
-    elif not DEG_PER_CYCLE:
+    elif not CLOSED_LOOP and not DEG_PER_CYCLE:
         logger.info(
             f"Calibration run. Measure how far the robot actually rotated, then "
             f"divide by {cycles_done} to get degrees per cycle and re-run with "

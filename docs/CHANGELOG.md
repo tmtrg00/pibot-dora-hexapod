@@ -132,6 +132,214 @@ Everything that needed the robot to see — avoiding obstacles, looking around o
 head-to-head speed test that was meant to prove the whole project worthwhile — is on hold until
 that new camera arrives.
 
+---
+
+## 2026-08-18 — Crab walking verified: the owner ran `./run.sh crabwalk` themselves and confirmed it works
+
+The lateral gait went from request to verified in one pass: the graph walks sideways right
+then left back to its start using the gait engine's x=±35 stride (a true lateral gait, not a
+turn), with the same offline frame-by-frame reach validation as the other locomotion graphs —
+which rejects `narrow` sideways (79.8mm minimum reach against the 90mm hard limit, its third
+consistent rejection across forward, turning was fine, and lateral) and clears every other
+stance. The owner ran the test themselves and confirmed the robot crab-walks; no node
+processes were left behind. Options recorded in the node header: stance, cycles, rounds,
+speed (`PIBOT_CRABWALK_*`).
+
+With this, every locomotion mode the gait engine offers is exercised through the dora graph
+and verified on hardware in a single day: forward/backward walking (in two footprints),
+closed-loop turning to ±0.5°, and now lateral crab walking.
+
+---
+
+## 2026-08-18 — The full 360° turn: 15 gait cycles, 0.5° residual, and the flat-battery-era milestone finally cleared
+
+`PIBOT_TURN_CLOSED_LOOP=1 PIBOT_TURN_DEGREES=360 ./run.sh turn`, owner watching and
+confirming. Fourteen cycles at angle 8 (remarkably consistent: −24.3° to −26.1° each), then
+one fine-trim cycle at angle 2 (−5.1°) to land at −359.5° integrated — **residual 0.5° against
+a 5° tolerance, 47 seconds of motion**. The battery never dropped below 6.47V under sustained
+locomotion, comfortably above the 6.0V floor with no override — the same manoeuvre that on
+2026-08-16 sagged the flat pack to 5.00V and aborted at 23 cycles.
+
+This closes the "complete 360° turn" milestone the flat-battery blocker named, and it is a
+better version than the one planned then: the open-loop plan needed a measured deg-per-cycle
+figure and dead reckoning over ~47 commanded cycles; the closed-loop turn needed no
+calibration constant at all and used 15 real cycles. The adaptive estimate settled at
+2.9°/unit (~23°/cycle at angle 8) — drifting down from 3.3 earlier in the evening as the pack
+and surface vary, which is exactly the variation closing the loop exists to absorb.
+
+---
+
+## 2026-08-18 — Stance-aware walking verified on hardware; the run also caught and fixed a stance-transition bug its own test had been hiding
+
+`./run.sh stancewalk` ran live twice, owner watching, and the footprint-carries-into-the-gait
+mechanism is confirmed: the robot walked 3 cycles forward and 3 back in `neutral`, then in
+`wide` (spread 1.12, leg reach 174mm), returning roughly to its start each time. The `narrow`
+skip fired exactly as designed — the offline frame-by-frame gait check rejected it live with
+"mid-gait leg reach 88.7mm below 98.0mm" before any servo moved. Battery bottomed at 6.35V
+under walking load, above the 6.0V floor; the ADC fix held throughout. The owner confirmed
+both runs looked right.
+
+**Fix: the geometry drift check refused any stance change away from a spread stance.**
+`stances.verify_against()` compared live `Control.body_points` against the stock
+BASE_FOOTPRINT — but after `wide` is applied, body_points legitimately holds the 1.12-scaled
+values, so the return to `neutral` was refused as "drift" and the first run ended with the
+robot still in wide. The hardware node now remembers the footprint it last applied and the
+drift check compares against that. Verified live in a second run: wide → walk → **neutral
+re-applied cleanly** (reach back to 147mm stock), 5/5 steps ok.
+
+**Fix: a refused stance reported as success.** That first failing run summarised "8/8 steps
+ok" around the refusal, a two-part reporting hole: the hardware node set the `refused` flag
+only for battery-gate refusals (apply_stance failures lived only in the text), and the test
+nodes' fallback text match looked for "FAILED"/"rejected" but not "refused". `apply_stance`
+now returns (ok, text) with the flag set from it, and both stance test nodes match "refused"
+too. The lesson is the project's founding one, resurfacing in miniature: a failure that only
+exists as prose in a success-shaped message is a silent failure.
+
+---
+
+## 2026-08-18 — Closed-loop turning verified on hardware: 90° reached with a 1.5° residual in four gait cycles
+
+Second live run of `PIBOT_TURN_CLOSED_LOOP=1 PIBOT_TURN_DEGREES=90 ./run.sh turn`, with both
+fixes from the first run in place. The robot turned 90° to the right and stopped; the owner
+confirmed the result. The per-cycle log tells the whole story: three cycles at angle 8
+(measured −23.5°, −24.4°, −25.2° of integrated yaw), then the planner scaled the last cycle
+down to angle 5 for the remaining 16.9° (measured −15.5°), finishing at −88.5° integrated —
+**residual 1.5° against a 5° tolerance, four gait cycles, ~14 s of motion, no oscillation and
+no overshoot**. Servos relaxed cleanly at the end of the graph.
+
+What this verifies beyond the headline: the ADC stable-read fix held (a forced battery read
+before every cycle, none of them hung; the pack read 6.59–7.29 V under load, above the 6.0 V
+floor, incidentally the first loaded reading since the pack was charged); the gyro sign
+convention was learned correctly on the first cycle (right turn reads negative on this
+mounting, `sense=-1`); and the adaptive per-angle-unit estimate pulled the 4.5°/unit seed down
+to a measured 3.3°/unit (~26°/cycle at angle 8 on this floor) and planned correctly with it.
+
+Two observations for later, neither blocking: the calibration warned "robot was not still"
+(15.9 deg/s gyro spread) because the servos had just driven to standing and were still
+jittering — a short settle before calibrating would quiet it; and the closed-loop turn graph
+does not terminate on its own (the hardware node ticks forever after the turn node exits), so
+the run ends by Ctrl+C, which the owner did. Neither affected the result.
+
+---
+
+## 2026-08-18 — First live turn_to run: the robot turned, then oscillated and froze — two bugs found, both fixed, neither yet re-verified
+
+The first hardware run of closed-loop turning (`PIBOT_TURN_CLOSED_LOOP=1 PIBOT_TURN_DEGREES=90
+./run.sh turn`, battery 6.59V unloaded) rotated the robot to roughly the target and then kept
+stepping back and forth across it without terminating; the run produced no result within its
+240s budget, survived SIGINT, and had to be SIGKILLed, leaving the servos energised until they
+were relaxed manually (`Servo().relax()` plus the power-disable pin). Node logs were lost with
+the killed processes' stdout buffers — the per-segment logging added afterwards exists because
+of exactly that blindness.
+
+**Fix: the unbounded ADC stable-read loop.** `ADC._read_stable_byte()` in the forked driver
+spun in `while True` until two consecutive I2C reads returned byte-identical values. Under
+servo load the pack reading ripples continuously (6.53–7.18V across the three telemetry lines
+before the turn), so identical consecutive reads can simply never arrive — and turn_to
+force-reads the battery between segments, right when the servos are holding pose. Now capped
+at 50 read pairs, returning the latest byte after that (1 LSB ≈ 59mV, ample for a battery
+gate). This was a latent upstream bug: the same call sits on the telemetry tick path of every
+graph, and it is precisely the silent-unbounded-loop class the MASTERPLAN names as the reason
+this project exists — found in our own fork, not the thread it was looking for.
+
+**Fix: the 36° turn quantum.** In `condition_monitor`, a turn command (x=0, y=0) takes the
+single-shot branch: one `run_gait` cycle, queue cleared — `walk()`'s `steps` argument does not
+multiply it. One cycle at angle=8 rotates the body ~36°, so turn_to's walk()-based segments
+could never settle into a ±5° tolerance: every correction overshot by ~36° in the other
+direction, which is the oscillation observed. This also reinterprets the 2026-08-16
+measurement: "23 cycles → 180° → 7.8°/cycle" counted *commanded* cycles; the robot really ran
+~5 single-shot cycles at ~36° each. turn_to now bypasses `walk()` and queues `CMD_MOVE`
+directly with the angle scaled 1..8 to the remaining error (~4.5°..36° per cycle, adaptive
+per-unit estimate), making the tolerance actually reachable, and logs every cycle: commanded
+angle, measured rotation, integrated yaw, battery.
+
+Neither fix has run on hardware yet; the turn_to PENDING item stays IN-FLIGHT with a re-run as
+its exit condition.
+
+---
+
+## 2026-08-18 — Closed-loop turning and stance-aware walking implemented; the offline gait check already caught `narrow` as unwalkable
+
+Two of the three deferred movement items are now code, awaiting hardware verification (both
+carried as IN-FLIGHT in PENDING). No servo has moved under this code yet.
+
+**Closed-loop turning.** The `hardware` node gained a `turn_to` tool (`nodes/hardware_node.py`):
+a `YawTracker` thread samples the MPU6050 z-gyro raw register (one I2C word per sample, ~200Hz,
+instead of the seven transactions `get_gyro_data()` costs — the sampler shares the bus with
+~1800 servo writes/s mid-gait), calibrates its bias over 1s standing still, and integrates yaw
+while short `walk(turn_*)` segments run. After each segment the plan is recomputed from
+measured rotation: the deg/cycle estimate starts at the 7.8 measured on 2026-08-16 and blends
+40% toward each segment's measurement, the gyro's sign convention is learned from the first
+segment rather than assumed, overshoot turns back the other way, and two consecutive segments
+under 1°/cycle abort the turn as "the gait is not rotating the body". Battery is force-read
+between segments against the same floor gate as every motion tool. `turn_to` is registered in
+`TOOL_OWNER`/`MOTION_TOOLS`, exposed to the LLM via `turn_tool_schema()` (15 tools now), and
+`turn_node.py` gained `PIBOT_TURN_CLOSED_LOOP=1`, which replaces the segment scheduling with a
+single `turn_to` call and a 300s step budget.
+
+**Stances in gaits.** `nodes/stances.py` gained `simulate_gait_reach()` /
+`validate_for_gait()`, a frame-by-frame offline replay of `run_gait`'s tripod arithmetic (same
+phase structure, same 4×/8× factors, same 40mm lift) that returns worst-case leg reach over a
+full cycle in a given stance and direction. The static check passes all 8 stances; the gait
+check found that **walking forward in `narrow` (spread 0.90) undershoots the reach window —
+88.7mm against the 90mm hard limit** — which on the robot would be silent per-frame no-ops from
+`set_leg_angles()`, i.e. a stuttering dragged-foot gait with no error anywhere. Turning in
+narrow is fine (116.2mm min); `wide` and `brace` walk with margin (139.0mm min, 204.3mm max).
+A new `stance_walk_test_node.py` + `dataflow-stancewalk.yml` (`./run.sh stancewalk`) walks
+forward/backward in narrow, neutral and wide, pre-validating each pair offline and skipping
+rejects with the reason logged — `narrow` will demonstrate the skip path.
+
+**Decision: the stance work stays in this project; the PENDING item asking where it should
+live (2026-08-16) is closed.** Upstreaming is not available to this project by its own binding
+rule — `/opt/pibot-hexapod` is never written — and the stance code is now more entangled here,
+not less: `set_stance` is served by the hardware node, the schema lives in `nodes/common.py`,
+and the new gait validation exists precisely because stances interact with this project's
+walking tests. The module remains deliberately dora-free (pure math + stdlib), so if the
+experiment is abandoned the owner can copy `nodes/stances.py` upstream as one file and expose
+it through `src/actions.py` there. Revisit only if the MASTERPLAN verdict retires this project.
+
+**Fix:** none — new capability, no defect corrected. The `narrow` finding is a defect *avoided*.
+
+---
+
+## 2026-08-18 — The flat-battery blocker is cleared at the owner's instruction; the pack has been charged
+
+**Decision: the [PINNED 2026-08-16] flat-battery entry is removed from PENDING at the owner's
+explicit instruction.** The pack has been charged since the 2026-08-16 measurements (6.94V
+rest / 5.88–6.00V loaded then; 7.18–7.76V on the load rail during the 2026-08-18 sensors run,
+unloaded). No reading under servo load has been taken yet — the first motion run will provide
+one, and the `hardware` node's 6.0V floor gate remains enforced in code either way, so a pack
+that sags under load still refuses motion on its own. The deliberate
+`PIBOT_BATTERY_FLOOR=5.0` overrides used during the 2026-08-16 tests are no longer in effect;
+motion runs from here use the default floor.
+
+---
+
+## 2026-08-18 — The sensors graph ran clean on the rebuilt venv: the Python 3.14 stack is verified against real hardware
+
+First hardware run since the venv rebuild (CHANGELOG 2026-08-17, "Rebuilt the venv on Python
+3.14"). With the robot electronics powered, `i2cdetect -y 1` showed all four expected devices
+(0x40, 0x41 PCA9685; 0x48 ADS7830; 0x68 MPU6050), and `./run.sh sensors` ran for 45 seconds
+under a SIGINT timeout with all four nodes (`hardware`, `ultrasonic`, `led`, `probe`) coming
+up, exchanging telemetry, and exiting with status Success. No orphaned node processes
+afterwards.
+
+What this exercised that the import test could not: `rpi_ws281x` drove the SPI LED strip
+("LED strip ready", emotions cycling on schedule) and `lgpio` ran the HC-SR04 (plausible
+distances of 20.1–40.9 cm) — both under kernel 7.0.0-1016-raspi. Battery telemetry flowed
+every 2 s: load rail 7.18–7.76 V, Pi rail a steady 8.06–8.12 V, with no servo load
+(`PIBOT_NO_MOTION=1`). The graph ran from `/opt/pibot-dora` itself — worktrees carry no venv,
+so hardware runs always launch from the main checkout.
+
+The pack has evidently been charged since the flat-battery measurements of 2026-08-16
+(these readings are ~1.2 V above the 5.88–6.00 V loaded readings then), but today's numbers
+are unloaded and the pinned battery entry requires a reading under servo load before the
+motion blockers clear, so that entry stands.
+
+**Fix:** none needed — everything worked first try.
+
+---
+
 ## 2026-08-17 — Merged the parallel camera investigation and retracted its hardware verdict: do not buy a cable, a camera module or a board
 
 Merged `origin/main`, which carried a parallel investigation from 2026-08-16 that this branch
