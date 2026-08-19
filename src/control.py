@@ -14,7 +14,7 @@ class Control:
         self.imu = IMU()
         self.servo = Servo()
         # Servo owns GPIO4 (servo power enable).  Expose the same .on()/.off()
-        # adapter so actions.py / server.py keep working unchanged.
+        # adapter so actions.py keeps working unchanged.
         self.servo_power_disable = self.servo.servo_power
         self.movement_flag = 0x01
         self.relaxation_flag = False

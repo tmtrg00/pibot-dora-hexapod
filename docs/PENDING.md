@@ -68,6 +68,3 @@ Deliberately deferred. Review when Active clears.
 - [TODO 2026-08-16] **Restructure the brain as a behaviour tree (`py_trees`).** Carried over
   from upstream. The brain owns no hardware, so its logic can be replaced without touching any
   other node — this architecture makes it a contained change.
-
-- [TODO 2026-08-16] **Remove `src/server.py`.** The Freenove TCP control path is a
-  testing-only holdover with no node using it, kept only because the fork copied `src/` whole.

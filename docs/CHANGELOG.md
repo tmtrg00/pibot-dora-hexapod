@@ -7,6 +7,24 @@ revert an old entry.
 
 ---
 
+## 2026-08-19 — Deleted src/server.py, the unused Freenove TCP control holdover, and trimmed the comments that named it
+
+Removed `src/server.py` (9 KB), the Freenove video/command TCP server carried over wholesale
+when the fork copied `src/`. No node, dataflow graph, or script imported or launched it: a
+repo-wide search for `import server` / `src.server` / `server.py` found only three descriptive
+comments, not a single real use. In the dataflow architecture the control path is the
+`tool_call` message stream, not a TCP socket, so this file had no role here.
+
+**Fix:** the three comments in `src/servo.py` and `src/control.py` that named `server.py` as a
+caller of the `_ServoPowerAdapter` `.on()/.off()` interface now name only `actions.py`, which is
+the sole remaining caller. The adapter itself is unchanged. `py_compile` passes on both edited
+files, and no reference to `server.py` remains anywhere in the tree.
+
+Plain-language summary: the robot's code included an old network-control program, inherited from
+the original robot, that let a PC drive it over a TCP connection. This project controls the
+robot a different way — small programs passing messages — so that file was never used. We
+deleted it and tidied up the three code comments that mentioned it by name.
+
 ## 2026-08-19 — Copied .env from PiBot-Hexapod into /opt/pibot-dora, so the full autonomous graph now has its API keys
 
 Copied the secrets file the fork never carried: `cp /opt/pibot-hexapod/.env /opt/pibot-dora/.env

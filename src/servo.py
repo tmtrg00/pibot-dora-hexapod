@@ -11,7 +11,7 @@ def map_value(value, from_low, from_high, to_low, to_high):
 class _ServoPowerAdapter:
     """
     Thin adapter so callers that expect a gpiozero-style .on()/.off() interface
-    (actions.py, server.py) can toggle servo power without knowing about lgpio.
+    (actions.py) can toggle servo power without knowing about lgpio.
 
     on()  → GPIO4 HIGH → servo power rail disabled (motors de-energised)
     off() → GPIO4 LOW  → servo power rail enabled  (motors can run)
@@ -39,7 +39,7 @@ class Servo:
         lgpio.gpio_claim_output(self._power_handle, self._SERVO_POWER_PIN)
         lgpio.gpio_write(self._power_handle, self._SERVO_POWER_PIN, 0)
 
-        # Adapter object for callers that use .on() / .off() (actions.py, server.py)
+        # Adapter object for callers that use .on() / .off() (actions.py)
         self.servo_power = _ServoPowerAdapter(self._power_handle, self._SERVO_POWER_PIN)
 
         self.pwm_40 = PCA9685(0x40, debug=True)
