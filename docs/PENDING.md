@@ -28,16 +28,6 @@ tells you something.
   Watch particularly for `rpi_ws281x` (SPI LEDs) and `lgpio` under the new kernel, neither of
   which an import test can exercise.
 
-- [TODO 2026-08-17] **Rewrite `requirements.txt` to match what is actually installed.** It is now
-  actively misleading: a 90+ line inherited freeze pinning `anthropic`, `google-generativeai`,
-  `groq`, `ollama`, Adafruit CircuitPython and `luma.oled`, none of which the code imports and
-  none of which the rebuilt venv contains. The real set is `dora-rs` and `dora-rs-cli` at 0.5.0
-  plus `openai`, `python-dotenv`, `pvporcupine`, `smbus2`, `webrtcvad`, `rpi-ws281x`,
-  `audioop-lts` and `pydub`, with the rest coming from system packages via
-  `--system-site-packages`. Left unchanged for now because replacing it is a scope decision, not
-  a side effect of the rebuild.
-
-
 - [TODO 2026-08-16] **Copy `.env` into this project.** The fork carried `src/`, `config/` and
   the calibration but not the secrets, so `OPENAI_API_KEY` and `PICOVOICE_ACCESS_KEY` are
   missing and the full graph cannot run. Sensor, motion, turn and stance graphs are unaffected.

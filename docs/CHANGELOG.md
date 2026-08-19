@@ -7,6 +7,40 @@ revert an old entry.
 
 ---
 
+## 2026-08-19 — Rewrote requirements.txt to the 11 packages the code actually imports, dropping the 90-line inherited freeze
+
+Replaced the inherited `requirements.txt` — a 90-line freeze carried over from PiBot-Hexapod
+that pinned `anthropic`, `google-generativeai`, `groq`, `ollama`, Adafruit CircuitPython,
+`luma.oled`, `opencv-python`, `RPi.GPIO`, `gpiozero` and more, none of which this code imports
+and none of which the rebuilt Python 3.14 venv contains — with the real dependency set.
+
+**Fix:** the file now lists exactly the pip-installed packages that code in `nodes/` and `src/`
+imports, pinned to the versions in the venv (verified with `pip install --dry-run`, all
+"already satisfied", no conflicts): `dora-rs==0.5.0`, `dora-rs-cli==0.5.0`, `pyarrow==25.0.1`,
+`openai==3.1.0`, `pvporcupine==4.0.3`, `webrtcvad==2.0.10`, `pydub==0.25.1`,
+`audioop-lts==0.2.2`, `smbus2==0.6.1`, `rpi-ws281x==5.0.0`, `python-dotenv==1.2.3`.
+
+**Decision: system-site-packages dependencies are documented in a comment, not pinned.** The
+venv is built with `--system-site-packages`, so `numpy`, `pyaudio`, `lgpio`, `spidev`, `smbus`,
+`yaml` (PyYAML), `libcamera` and `picamera2` are supplied by apt and resolve to
+`/usr/lib/python3/dist-packages`. Pinning them in `requirements.txt` would fight the OS packages
+they shadow, so the header lists each with its apt package name instead. This is the deliberate
+arrangement the rebuild established (CHANGELOG 2026-08-17), now made legible.
+
+Method: enumerated every `import` in `nodes/` and `src/`, resolved each module to its
+`__file__`, and split them by whether they live in the venv or in the system dist-packages.
+`cv2` (opencv) and `scipy` were in the old freeze but are imported nowhere, so they are gone.
+`audioop-lts` earns its place twice over — code imports `audioop` directly and `pydub` needs it,
+and stdlib `audioop` was removed in Python 3.13, so on 3.14 the backfill is mandatory.
+
+Plain-language summary: the project's list of required software libraries was inherited from the
+old robot and had grown badly out of date — it named a dozen AI and hardware libraries the code
+never uses, while the venv it was supposed to describe had been rebuilt from scratch with a
+different, much smaller set. Anyone reading it to understand or rebuild the environment would
+have been misled. It now names precisely the eleven libraries the code installs itself, each
+pinned to the version in use, with a note listing the eight more that come from the operating
+system.
+
 ## 2026-08-19 — Closed the camera investigation as failed: this camera works on neither Ubuntu nor Raspberry Pi OS, so we will try a different camera type
 
 Closing the camera out of PENDING and stopping the investigation. Per the owner (2026-08-19),
