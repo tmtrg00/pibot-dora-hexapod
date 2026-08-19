@@ -18,7 +18,7 @@ sign over a turn. A turn should approach its target from one side and stop.
 Every reversal is the robot visibly rocking back the other way, so more than
 one is a failure however good the final number looks.
 
-    ./venv/bin/python test/turn_settles.py
+    ./bin/py test/turn_settles.py
 """
 import sys, os, types, threading, time, tempfile
 

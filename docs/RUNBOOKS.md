@@ -13,6 +13,15 @@ Contents: §1 running graphs · §2 how nodes are launched · §3 battery · §4
 
 All graphs are launched through `./run.sh`, which cleans up orphaned nodes on entry and exit.
 
+**Running from a git worktree.** The venv is untracked, so a worktree has none of its own.
+`./run.sh` falls back to the main checkout's venv automatically, but a bare `./venv/bin/python`
+will not exist. Use `./bin/py`, the node launcher, which always execs the right interpreter:
+
+```bash
+./bin/py test/servo_recover.py     # works in the main checkout and in a worktree
+./venv/bin/python <script>         # main checkout only
+```
+
 ```bash
 ./run.sh sensors      # telemetry + LED. NO motion, no mic, no API spend. Start here.
 ./run.sh stance       # cycle named stances. Moves legs; does not travel.
@@ -202,10 +211,10 @@ below the floor, relaxes first so leads can be re-seated by hand, and moves a si
 a time so a dead one can be identified by watching:
 
 ```bash
-./venv/bin/python test/servo_recover.py          # check every joint, then rest pose
-./venv/bin/python test/servo_recover.py --leg 3  # one leg only
-./venv/bin/python test/servo_recover.py --rest   # skip the check, just go to rest pose
-./venv/bin/python test/servo_recover.py --relax  # torque off and exit
+./bin/py test/servo_recover.py          # check every joint, then rest pose
+./bin/py test/servo_recover.py --leg 3  # one leg only
+./bin/py test/servo_recover.py --rest   # skip the check, just go to rest pose
+./bin/py test/servo_recover.py --relax  # torque off and exit
 ```
 
 **Stand the robot on a box so its legs hang free before running it.** Legs that are out of

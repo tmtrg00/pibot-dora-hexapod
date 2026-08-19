@@ -23,10 +23,10 @@ each joint gets a small sweep and you say whether it moved.
 
 Usage, from the project root:
 
-    ./venv/bin/python test/servo_recover.py             # check, then stand
-    ./venv/bin/python test/servo_recover.py --rest      # skip the check, just stand
-    ./venv/bin/python test/servo_recover.py --leg 3     # check one leg only
-    ./venv/bin/python test/servo_recover.py --relax     # torque off and exit
+    ./bin/py test/servo_recover.py             # check, then stand
+    ./bin/py test/servo_recover.py --rest      # skip the check, just stand
+    ./bin/py test/servo_recover.py --leg 3     # check one leg only
+    ./bin/py test/servo_recover.py --relax     # torque off and exit
 """
 import argparse
 import os
