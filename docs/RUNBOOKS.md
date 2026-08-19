@@ -223,6 +223,12 @@ diff /opt/pibot-hexapod/point.txt /opt/pibot-dora/point.txt
 diff /opt/pibot-hexapod/config/config.yaml /opt/pibot-dora/config/config.yaml
 ```
 
+The `diff -rq` above now reports `Only in /opt/pibot-hexapod/src: server.py` — that is
+**expected, not drift to reconcile**. `src/server.py` (the Freenove TCP control path) was
+deleted here on 2026-08-19 because no node uses it; the dataflow control path is the `tool_call`
+message stream, not a TCP socket (CHANGELOG 2026-08-19). Do **not** copy it back to "fix" the
+diff. It still exists upstream because `/opt/pibot-hexapod` is never modified by this project.
+
 Pull a specific upstream fix across deliberately, then record it in CHANGELOG:
 
 ```bash
