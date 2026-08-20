@@ -7,6 +7,46 @@ revert an old entry.
 
 ---
 
+## 2026-08-20 — Approach re-verified on hardware: retreat works for the first time, forward accuracy is worse than hoped, and the graph doesn't exit on its own
+
+Ran `./run.sh approach` twice, chasing the accuracy re-check PENDING had open since 2026-08-19.
+No code changed this session — this was observation.
+
+The first run aborted before any leg moved: `hardware` waited 5s for a distance reading from
+`ultrasonic` and got none, logged `approach ABORTED: the distance sensor never reported, so
+nothing moved`, and safely backed out to neutral stance with servos relaxed. Investigated by
+running the sensor standalone, outside the dora graph entirely (`./bin/py
+test/test_ultrasonic.py`): with the head level it read a rock-solid 49.0cm and then 82.5cm
+across roughly 30 samples each, zero dropouts. The sensor and its mount are not the fault; an
+earlier close-range reading (2.8-5.4cm) from the same tool was a red herring — the head was
+tilted down and the owner was waving an arm in front of it at the time, not testing the
+approach geometry.
+
+The second run, same physical setup, worked end to end: 140 distance readings received, all 5
+steps completed. Numbers: approach walked forward 5 cycles from 84.4cm and stopped at **33.3cm
+against a 25cm target — 8.3cm over**, worse than the "couple of cm" the PENDING note was hoping
+to confirm. Retreat then walked backward 2 cycles from 29.7cm and stopped at **47.5cm against a
+50cm target — 2.5cm short** — and this is the first time the retreat path has ever executed on
+hardware; both prior attempts had found the sensor already past the target distance with
+nothing to retreat from.
+
+Both runs surfaced a second, unrelated fault: after `approach_test` finished and logged "finished
+successfully", `hardware` and `ultrasonic` kept idling on their timer ticks indefinitely and
+`dora run` never returned control — `./stop.sh` was needed both times to clear it. The robot
+itself was already safe in both cases (back in neutral, servos relaxed, before the hang), so
+this is a graph-teardown bug in the dora invocation, not a safety issue, but the CLI does not
+exit on its own after this graph.
+
+Plain-language summary: the robot's obstacle-approach test was re-run to see how accurately it
+stops near a wall. The first attempt found nothing at all — the distance sensor delivered no
+readings — but testing the sensor on its own (not through the full robot programme) showed it
+works fine, so that was a fluke of the test run rather than a broken sensor. The second attempt
+worked properly: the robot walked up to the target and stopped about 8cm further out than
+asked, then backed away and stopped about 2.5cm short of where it should have — the backing-off
+manoeuvre had never actually been tested on the real robot before, and now it has. Separately,
+after the test finishes the software behind it doesn't shut itself down properly and has to be
+stopped by hand — worth fixing but not something that put the robot at risk.
+
 ## 2026-08-19 — A servo lead pulled out mid-testing; the legs check out and the robot stands again
 
 A servo lead came out of its connector while the movement graphs were being run, leaving

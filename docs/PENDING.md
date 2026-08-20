@@ -25,16 +25,22 @@ tells you something.
   cycles so the final one carries less rotation and its prediction error is proportionally
   smaller, which costs two or three extra cycles per turn.
 
-- [TODO 2026-08-19] **Re-check approach accuracy after the travel-per-cycle change.** The
-  approach was changed to average its travel-per-cycle over the whole approach rather than a
-  two-cycle window, after the first run stopped 4.7cm over target while reporting 8.9cm per cycle
-  where the true figure was about 6.2. That change is simulated only — `./run.sh approach` has
-  not run since. It should stop within a couple of cm of target, measured with a tape.
+- [TODO 2026-08-20] **Approach still overshoots its stop target, now by more than the old
+  window-based estimate.** One hardware run (CHANGELOG 2026-08-20) with the travel-per-cycle
+  averaging change in place: forward approach stopped 8.3cm over a 25cm target (33.3cm actual),
+  worse than the "couple of cm" hoped for and worse than the 4.7cm overshoot the averaging
+  change was meant to fix. Retreat was tighter — 2.5cm short of a 50cm target. Only one run so
+  far and the distances are sensor-reported, not tape-verified against the physical robot.
+  Needs a few more runs, ideally with an independent tape measurement, before concluding the
+  averaging change made things worse rather than this run being an outlier.
 
-- [SHELVED 2026-08-19] **The approach's retreat path has never run on hardware.** Both attempts
-  ended with the sensor reading past the obstacle ("already 136.6cm away, needed no movement"),
-  which is the correct response but exercises nothing. Needs a run that ends close enough to an
-  obstacle for the backward leg to have somewhere to go.
+- [TODO 2026-08-20] **`dataflow-approach.yml` never exits on its own.** Twice in a row
+  (CHANGELOG 2026-08-20), after the `approach_test` driver node logged "finished successfully"
+  and returned the robot to neutral/relaxed, `hardware` and `ultrasonic` kept idling on their
+  timer ticks forever and `dora run` never returned — `./stop.sh` was needed both times. The
+  robot was already safe when this happened, so it's not a hardware risk, but the CLI silently
+  hanging after a "successful" run is worth fixing and worth checking against the other
+  single-purpose test graphs to see if they share the same teardown gap.
 
 - [TODO 2026-08-16] **Verify the full autonomous graph end to end.** Four of the eight nodes
   have never run against real hardware: `audio`, `llm`, `brain` and `buzzer`. The wake word,
