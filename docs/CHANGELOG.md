@@ -7,6 +7,39 @@ revert an old entry.
 
 ---
 
+## 2026-08-20 — Servo pack recharged and the calibrated head verified on hardware: level is level, up is up, and the ultrasonic sees what it aims at
+
+The charger found the right battery this time: the load channel read 7.29V with servo power
+on (up from 3.12V last night), the pi channel 8.06V. That cleared the pinned blocker and
+unblocked the head verification, which passed on all counts.
+
+**The watchable sweep** (`test/test_head.py`): the owner confirmed by eye that commanded
+level looks level (the +30 trim from `data/head_trim.json` doing its job), that tilt +20
+genuinely looks UP — the first time this head has looked above the horizon — that every move
+reads as a smooth eased gesture at the default 80deg/s rather than a snap, and that the final
+torque release lets the head go limp without a twitch.
+
+**The aim survey** (`test/test_head_aim.py`): with no target it returned 0-1 echoes at every
+tilt, same as yesterday — confirming those empty runs meant "nothing in range", not a fault.
+With a box ~88cm ahead it returned 20/20 echoes at every tilt from -20 to +15deg, medians flat
+at 87.4-88.6cm, degrading only at +20 (14/20, 90.5cm) where the beam starts clearing the top
+of the box. **Decision:** the script's closing suggestion to apply a further -10deg trim is
+rejected as noise — it picked a 2mm median difference between tilts with identical echo
+counts; the flat distance profile across ±15deg is exactly what a correctly-levelled head
+with the HC-SR04's wide beam should produce. The trim stays at +30 as calibrated yesterday.
+
+Still owed from the original task: `./run.sh approach` end to end with the calibrated aim —
+its levelling and torque-hold logging is verified but its stopping accuracy is not. That
+remains in PENDING as its own item.
+
+Plain-language summary: the motor battery is charged again, and the head fixes from
+yesterday all check out on the real robot. The head now holds truly level, can look up for
+the first time, and moves smoothly like a living thing rather than snapping between poses.
+The distance sensor mounted on it measures a box in front accurately no matter which way the
+head is tilted, which proves the aim correction is right. The one remaining check is letting
+the robot walk up to an obstacle and stop at the right distance using the newly-corrected
+sensor.
+
 ## 2026-08-20 — Head tilt calibrated by eye (level is servo +30, up is up), and the "collapsing battery" was real: the servo pack drained while the charger sat on the wrong one
 
 Two results from the evening session, one good and one humbling.

@@ -9,19 +9,10 @@ tells you something.
 
 ## Active
 
-- [PINNED 2026-08-20] **Charge the SERVO battery pack — the charger likely went on the Pi's
-  pack.** The robot has two batteries: the ADC load channel tracks the servo pack (ran down to
-  ~3.1V over the day's testing, servos whine and barely move), the pi channel the Pi's pack
-  (held 7.4V all day, did not need charging). Nothing that moves can run or be verified until
-  the servo pack reads ~7V or better on the load channel. (CHANGELOG 2026-08-20.)
-
-- [TODO 2026-08-20] **Verify the calibrated, lifelike head on hardware.** Blocked on the
-  servo-pack charge above. `test/test_head.py` should show the head sitting truly level
-  (servo 120 via `data/head_trim.json`), sweeping with the eased profile, and looking UP for
-  the first time on tilt +20. Then re-run the aim survey `test/test_head_aim.py` with a wall
-  or box 0.5-1.5m ahead — it returned 0-1 echoes at every tilt when nothing was in range —
-  and finally `./run.sh approach` end to end, whose head-levelling and torque-hold log lines
-  are already verified but whose accuracy with the calibrated aim is not.
+- [TODO 2026-08-20] **Re-run `./run.sh approach` end to end with the calibrated head.** The
+  last piece of the head verification (CHANGELOG 2026-08-20): the head-levelling and
+  torque-hold log lines are already verified, but the approach's stopping accuracy with a
+  truly level sensor is not. A box ~88cm ahead worked as a survey target and works here too.
 
 - [TODO 2026-08-16] **Verify the full autonomous graph end to end.** Four of the eight nodes
   have never run against real hardware: `audio`, `llm`, `brain` and `buzzer`. The wake word,
