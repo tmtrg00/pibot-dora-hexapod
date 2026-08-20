@@ -165,6 +165,7 @@ bin/py               Node launcher; forces the venv interpreter (RUNBOOKS §2)
 ./run.sh attitude   # roll/pitch axis check — watch the robot, not the log
 ./run.sh fight      # sparring gesture: rears onto four legs, jabs with the front pair (does not travel)
 ./run.sh hypno      # belly-sat display: all six legs ripple in the air (does not travel)
+./run.sh dance      # body grooves over planted feet: bounce, sway, circle, twist, bow (does not travel)
 ./run.sh idlereset  # stance returns to neutral once the robot stops
 ./run.sh camera     # capture attempts only
 ./run.sh            # full autonomous graph, the equivalent of the original main.py
@@ -193,5 +194,6 @@ Names only; full catalogue and credential handling in RUNBOOKS §8.
 - `PIBOT_HEAD_SPEED_DEG_S`, `PIBOT_HEAD_RAMP_PAUSE_S` — head sweep speed (default 80 deg/s, eased; 0 restores the single-write jump) and frame time.
 - `PIBOT_FIGHT_JABS`, `PIBOT_FIGHT_FRAME_S` — fight routine: jab rounds (default 2) and frame time.
 - `PIBOT_HYPNO_CYCLES`, `PIBOT_HYPNO_PERIOD_S`, `PIBOT_HYPNO_AMP_MM` — hypno wave: ripple count (default 4), period (default 2.0s), lift amplitude.
+- `PIBOT_DANCE_REPEATS`, `PIBOT_DANCE_BEAT_S` — dance: rounds of the four grooves (default 1) and beat length (default 0.75s).
 - `PIBOT_GAIT_FRAME_MS`, `PIBOT_GAIT_SETDOWN_FRAMES`, `PIBOT_GAIT_GROUND_PRESSURE_MM` — gait timing and foot placement.
 - `PIBOT_SERVO_WRITE_CACHE` — 0 to write every servo every frame, as before.

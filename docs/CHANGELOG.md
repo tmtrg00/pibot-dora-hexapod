@@ -7,6 +7,35 @@ revert an old entry.
 
 ---
 
+## 2026-08-20 — A real dance: the body grooves over planted feet, replacing the upstream roll-rock under the same tool name
+
+Third choreography of the day, owner-verified on hardware first try. `nodes/dance.py`
+(standalone per the house rule) keeps all six feet planted for the entire routine — the body
+dances between them, so there is no support-polygon question at all — and drives what the
+queued commands cannot: per-leg z for the sway lean and the bow, and a foot-point rotation
+for the body twist. The set list: eased sink into a 6mm crouch, bounce, side-sway ±22mm with
+a lean into it, a circling grind, ±12deg twist, a bowed dip-and-hold, a quick pop finale, and
+an eased rise. ~18s at the default 0.75s beat; `PIBOT_DANCE_REPEATS`, `PIBOT_DANCE_BEAT_S`,
+`PIBOT_DANCE_FRAME_S` tune it. Fluidity via the hypno technique: every move's oscillation is
+envelope-faded over 0.25s and starts/ends exactly on the groove pose, verified continuous at
+5.7mm worst per-frame foot travel across 920 frames (that peak is the sway's intended speed).
+Every frame reach-validated offline (125.6..165.3mm against the usable 98..240mm).
+
+**Decision:** this REPLACES the upstream `dance` tool (a ±10deg roll rock through
+CMD_ATTITUDE in src/actions.py) under the same name: the hardware node now serves `dance`
+from nodes/dance.py before the upstream dispatch is reached, so the unchanged upstream schema
+— and therefore the voice command — gets the real choreography. The upstream branch remains
+in src/actions.py untouched but unreachable, consistent with leaving upstream files alone.
+`dance` was already in MOTION_TOOLS and TOOL_OWNER, so the battery gate and routing needed no
+change. `./run.sh dance` (`dataflow-dance.yml` + `nodes/dance_test_node.py`) is the watchable
+graph.
+
+Plain-language summary: asking the robot to dance used to produce a stiff side-to-side rock;
+now it performs a real routine — it crouches slightly and grooves: bobbing, swaying with a
+lean like it means it, grinding its body in a circle, twisting its hips, taking a bow and
+finishing with a little spring. Its feet never move from the floor, so it cannot stumble, and
+every move flows into the next without a pause. The voice command "dance" now triggers this.
+
 ## 2026-08-20 — The hypno wave: the robot sits on its belly and ripples all six legs in a travelling, hypnotic wave
 
 Second choreography of the day, owner-requested and owner-verified on hardware in two

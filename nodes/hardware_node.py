@@ -42,6 +42,7 @@ from common import (
 
 common.bootstrap()
 
+import dance as dance_routine  # noqa: E402
 import fight as fight_routine  # noqa: E402
 import hypno as hypno_routine  # noqa: E402
 import stances  # noqa: E402
@@ -549,6 +550,12 @@ class Hardware:
     def hypno_wave(self) -> Tuple[bool, str]:
         """The belly-sat leg ripple — see nodes/hypno.py."""
         return self._run_choreography("hypno_wave", hypno_routine.perform)
+
+    def dance(self) -> Tuple[bool, str]:
+        """The feet-planted body groove — see nodes/dance.py. Replaces the
+        upstream dance (a ±10deg roll rock through CMD_ATTITUDE) under the
+        same tool name, so the unchanged upstream schema reaches this."""
+        return self._run_choreography("dance", dance_routine.perform)
 
     def turn_to(self, degrees, tolerance=None) -> str:
         """Rotate in place by `degrees`, closed-loop on the z gyro.
@@ -1675,16 +1682,19 @@ def main() -> None:
                     )
                     continue
 
-                # fight and hypno_wave are served here for the same reason as
-                # set_stance: the choreography drives per-leg foot points
-                # through Control directly, which no queued command can
-                # express.
-                if name in ("fight", "hypno_wave"):
+                # fight, hypno_wave and dance are served here for the same
+                # reason as set_stance: the choreography drives per-leg foot
+                # points through Control directly, which no queued command can
+                # express. dance thereby overrides the upstream tool of the
+                # same name in src/actions.py, whose branch is never reached.
+                if name in ("fight", "hypno_wave", "dance"):
                     refusal = hw.motion_refusal(name, args)
                     if refusal is not None:
                         applied, text = False, refusal
                     else:
-                        applied, text = hw.fight() if name == "fight" else hw.hypno_wave()
+                        run = {"fight": hw.fight, "hypno_wave": hw.hypno_wave,
+                               "dance": hw.dance}[name]
+                        applied, text = run()
                     node.send_output(
                         "tool_result",
                         encode(
