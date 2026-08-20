@@ -6,6 +6,7 @@ TOOLS: OpenAI tool schemas exposed to the LLM.
 execute(): dispatch one tool call against available hardware.
 """
 
+import json
 import os
 import threading
 import time
@@ -245,6 +246,40 @@ HEAD_SPEED_DEG_S = max(0.0, float(os.environ.get("PIBOT_HEAD_SPEED_DEG_S", "80")
 HEAD_RAMP_PAUSE_S = max(0.005, float(os.environ.get("PIBOT_HEAD_RAMP_PAUSE_S", "0.02")))
 
 
+def _load_head_tilt_calibration() -> tuple:
+    """(sign, trim_deg) mapping caller tilt to the servo, calibrated per robot.
+
+    The tilt servo's 90deg is set by how the horn was pressed on, not by
+    physical level — on this robot "level" sat visibly nose-down, and the
+    owner never saw the head look up (2026-08-20). So callers speak in
+    physical terms (tilt 0 = level, positive = up) and this mapping absorbs
+    the robot: servo_tilt = sign * tilt + trim. Learned once by eye with
+    test/test_head_tilt_cal.py into data/head_trim.json (like the gyro sign
+    in data/gyro_sense.json); PIBOT_HEAD_TILT_SIGN / _TRIM override.
+    """
+    sign_env = os.environ.get("PIBOT_HEAD_TILT_SIGN")
+    trim_env = os.environ.get("PIBOT_HEAD_TILT_TRIM")
+    sign = None if sign_env is None else (1 if float(sign_env) >= 0 else -1)
+    trim = None if trim_env is None else float(trim_env)
+    if sign is None or trim is None:
+        home = os.environ.get(
+            "PIBOT_HOME", os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        )
+        try:
+            with open(os.path.join(home, "data", "head_trim.json")) as fh:
+                data = json.load(fh)
+            if sign is None:
+                sign = 1 if float(data.get("sign", 1)) >= 0 else -1
+            if trim is None:
+                trim = float(data.get("trim_deg", 0.0))
+        except (OSError, ValueError):
+            pass
+    return (1 if sign is None else sign), (0.0 if trim is None else trim)
+
+
+HEAD_TILT_SIGN, HEAD_TILT_TRIM = _load_head_tilt_calibration()
+
+
 def _clamp(value: Any, minimum: int, maximum: int) -> int:
     return max(minimum, min(maximum, int(value)))
 
@@ -372,6 +407,11 @@ def release_head(servo: Any, hardware: Dict[str, Any]) -> None:
         _relax_servo_channel(servo, channel)
 
 
+def head_level_xy() -> tuple:
+    """The servo (x, y) pair that set_head writes for physically level."""
+    return (90, _clamp(round(90 + HEAD_TILT_TRIM), 0, 180))
+
+
 def set_head(servo: Any, hardware: Dict[str, Any], pan: Any, tilt: Any) -> tuple:
     """Move the head to (pan, tilt) degrees, ramped. Returns the clamped pair.
 
@@ -384,7 +424,9 @@ def set_head(servo: Any, hardware: Dict[str, Any], pan: Any, tilt: Any) -> tuple
     pan = _clamp(pan, -90, 90)
     tilt = _clamp(tilt, -90, 90)
     x = _clamp(90 + pan, 50, 180)
-    y = _clamp(90 + tilt, 0, 180)
+    # Callers speak physically (0 = level, positive = up); the calibrated
+    # sign and trim translate that to this robot's servo frame.
+    y = _clamp(round(90 + HEAD_TILT_SIGN * tilt + HEAD_TILT_TRIM), 0, 180)
     previous = hardware.get("_head_xy")
     travel = 0 if previous is None else max(abs(x - previous[0]), abs(y - previous[1]))
     if travel and HEAD_SPEED_DEG_S > 0:

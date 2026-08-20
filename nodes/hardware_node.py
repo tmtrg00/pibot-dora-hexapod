@@ -52,7 +52,7 @@ from heading import (  # noqa: E402
 
 from dora import Node  # noqa: E402
 from src.actions import execute as run_action  # noqa: E402
-from src.actions import release_head  # noqa: E402
+from src.actions import head_level_xy, release_head  # noqa: E402
 from src.adc import ADC  # noqa: E402
 from src.command import COMMAND as cmd  # noqa: E402
 from src.control import Control  # noqa: E402
@@ -1451,10 +1451,11 @@ class Hardware:
         # The head is part of the resting pose too: a head left panned or
         # tilted keeps the camera and the head-mounted ultrasonic aimed
         # somewhere nobody chose, and sensor aim is exactly what the approach
-        # depends on. (90, 90) is level; None means never commanded, which
+        # depends on. head_level_xy() is level in the calibrated servo frame;
+        # None means never commanded, which
         # startup levelling makes rare, and an unknown position is left alone.
         head_xy = self._hardware_dict.get("_head_xy")
-        head_off_level = head_xy is not None and head_xy != (90, 90)
+        head_off_level = head_xy is not None and head_xy != head_level_xy()
         if self.applied_stance == "neutral" and not head_off_level:
             return None
         if time.time() - self.last_motion_at < IDLE_STANCE_RESET_S:
