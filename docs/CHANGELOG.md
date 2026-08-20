@@ -7,6 +7,47 @@ revert an old entry.
 
 ---
 
+## 2026-08-20 — The approach was never inaccurate: a tilted sensor faked the overshoot, and with the head levelled it stops dead on target
+
+Resolves the approach overshoot (PENDING). The owner levelled the ultrasonic sensor — it had
+been tilted down, which was making the approach abort with no distance readings (a downward
+beam mostly hits the floor and returns no echo; see the earlier 2026-08-20 entry) — and re-ran
+`./run.sh approach` with a tape measure. It saw the obstacle, walked to it, and **stopped
+exactly 25cm away by tape** against a 25cm target.
+
+The instrumentation added earlier today (previous entry) is what makes this conclusive rather
+than anecdotal, and it disproved the working hypothesis:
+
+    approach diagnostic: stop decided at 33.9cm, loop predicted the cycle in flight would reach
+    23.9cm (lead 10.0cm at 10.0cm/cycle); settled at 24.2cm — the in-flight cycle actually
+    carried 9.7cm (-0.3cm vs the lead predicted), final -0.8cm from the 25cm target
+
+With the sensor level the loop got **101 distance readings** (versus 3 when tilted), the
+per-cycle travel prediction was near-perfect (predicted 10.0cm for the in-flight cycle, the
+robot actually moved 9.7cm), and it settled at 24.2cm by sensor / 25cm by tape — essentially
+on target. The sensor's own reading agreeing with the tape to under a centimetre also confirms
+the HC-SR04 reads true when it is aimed level.
+
+**Decision:** do not change the approach lead calculation. The 8.3cm "overshoot" recorded on
+2026-08-19/20 was an artifact of the tilted sensor reading long and sparse, not a control
+error, and the hypothesis floated in the previous entry — that the final decelerating cycle
+covers far less than the whole-approach average, so the lead over-predicts — is wrong: measured,
+the in-flight cycle carried 9.7cm against a 10.0cm prediction. Acting on that hypothesis would
+have detuned a loop that was already accurate. This is the case the "instrument before you
+change a movement loop" rule exists for.
+
+The three-point diagnostic line is kept: it cost nothing here and turned a suspected bug into a
+measured non-bug in a single run, which is exactly what it is for if the approach is ever
+suspected again.
+
+Plain-language summary: the robot was thought to stop too far from obstacles. It turned out the
+distance sensor was pointing slightly down, so it both struggled to see the obstacle at all and,
+when it did, read the distance as longer than it really was — which looked like the robot
+stopping short. Once the sensor was straightened, the robot walked up and stopped exactly 25cm
+away, measured with a tape. The measurement tool added earlier confirmed the robot's own
+stopping calculation was right all along, so nothing in the walking code needed changing — and
+changing it, as had been considered, would have made a correct thing wrong.
+
 ## 2026-08-20 — Instrumented the approach stop to measure the in-flight cycle's real travel, before touching the accuracy
 
 The approach overshoot (PENDING) had one hardware run of data — stopped 8.3cm short of a 25cm

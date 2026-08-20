@@ -9,24 +9,6 @@ tells you something.
 
 ## Active
 
-- [IN-FLIGHT 2026-08-20] **Approach stops short of its target; instrumented, now needs
-  tape-measured runs.** One hardware run stopped 8.3cm short of a 25cm target (settled ~31.8cm),
-  worse than the 4.7cm the travel-per-cycle averaging change was meant to fix. Retreat was
-  tighter — 2.5cm short of a 50cm target. The approach stop is now instrumented (CHANGELOG
-  2026-08-20): each stop logs an `approach diagnostic:` line giving the decision distance, the
-  predicted in-flight-cycle landing, and the settled distance, so the final cycle's real travel
-  is measured against the predicted `lead_cm`. The instrumentation is verified to run and not
-  disturb motion, but has not produced values yet — that needs `./run.sh approach` on hardware.
-
-  Get this before changing the lead calculation: (1) a few runs with a **tape measure** against
-  the physical robot, since all distances so far are the ultrasonic grading its own homework and
-  the sensor could read long or short; (2) the `approach diagnostic:` numbers from those runs.
-  Working hypothesis to confirm or refute (do not act on it yet): the final cycle is a
-  decelerating, stopping cycle that covers far less than a full-stride cruising cycle, so the
-  whole-approach average over-predicts it as the lead and stops the robot early — by hand on the
-  one existing run, predicted lead 12.8cm vs ~1.5cm actually travelled after the decision. Only
-  the forward approach is affected; the retreat leg lands within a couple of cm.
-
 - [TODO 2026-08-16] **Verify the full autonomous graph end to end.** Four of the eight nodes
   have never run against real hardware: `audio`, `llm`, `brain` and `buzzer`. The wake word,
   Whisper, GPT-4o, tool dispatch, TTS and barge-in path is entirely unproven. `buzzer` is the
