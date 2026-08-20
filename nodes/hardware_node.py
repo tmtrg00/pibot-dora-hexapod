@@ -55,7 +55,15 @@ from heading import (  # noqa: E402
 
 from dora import Node  # noqa: E402
 from src.actions import execute as run_action  # noqa: E402
-from src.actions import head_level_xy, release_head  # noqa: E402
+from src.actions import (  # noqa: E402
+    _cycles_run,
+    _estimated_cycle_duration,
+    _queue_command,
+    _wait_for_clear,
+    _wait_for_cycles,
+    head_level_xy,
+    release_head,
+)
 from src.adc import ADC  # noqa: E402
 from src.command import COMMAND as cmd  # noqa: E402
 from src.control import Control  # noqa: E402
@@ -556,6 +564,94 @@ class Hardware:
         upstream dance (a ±10deg roll rock through CMD_ATTITUDE) under the
         same tool name, so the unchanged upstream schema reaches this."""
         return self._run_choreography("dance", dance_routine.perform)
+
+    def sprint(self, cycles) -> Tuple[bool, str]:
+        """Run forward as fast as the gait validates: top cadence and the
+        longest stride the reach window allows — in the NEUTRAL stance.
+
+        The first version sprinted in the wide stance, whose footprint
+        validates strides up to 65mm; on hardware the feet skated "as if on
+        ice" (owner observation, 2026-08-20) — splayed legs thrust outward as
+        much as backward at sprint cadence, and shear beats grip. Neutral
+        keeps the feet under the body pushing near-vertically, and still
+        validates a 50mm stride at speed 10: +43% over the normal 35mm clamp.
+
+        The stride is found by descending search through the same offline
+        gait simulation the stance walks use, then Control.stride_limit
+        (upstream clamp 35, parameterized for this) is raised for the dash
+        and restored after, whatever happens.
+        """
+        try:
+            cycles = int(cycles)
+        except (TypeError, ValueError):
+            cycles = 6
+        cycles = max(1, min(12, cycles))
+        # Speed 9, not 10, and deliberately: at speed 10 the swing phase is
+        # ~5 frames, less time than the leg servos need to physically track
+        # the lift — commanding a higher lift changed nothing on hardware
+        # because the profile turned around before the leg got there (owner
+        # observation, 2026-08-20, battery healthy at 7.4V). Speed 9 gives
+        # the swing ~60% more frames, which the servos can follow; the
+        # saturated speed-10 frames were overrunning their deadlines anyway,
+        # so little real pace is lost.
+        speed = 9
+
+        # The sprint steps HIGH as well as long: 60mm swing lift vs the
+        # normal 40mm, so fast strides clear the floor instead of skimming
+        # it (owner observation, 2026-08-20: "really close to the floor").
+        # Offline validation shows lift barely moves the reach envelope —
+        # a raised foot travels toward the middle of the leg's reach — but
+        # the (stride, lift) pair is validated together regardless.
+        lift = 60
+        stance = stances.STANCES["neutral"]
+        stride = None
+        for candidate in range(50, 34, -5):
+            ok, lo, hi, reason = stances.validate_for_gait(
+                stance, 0, candidate, 0, speed, lift=lift)
+            if ok:
+                stride = candidate
+                break
+        if stride is None:
+            return False, "sprint refused: no stride validates in the neutral stance"
+
+        if self.applied_stance != "neutral":
+            ok, text = self.apply_stance("neutral")
+            if not ok:
+                return False, f"sprint refused: could not return to neutral first — {text}"
+
+        control = self.control
+        control.stride_limit = stride
+        control.gait_lift = lift
+        try:
+            move = [cmd.CMD_MOVE, "1", "0", str(stride), str(speed), "0"]
+            budget = max(3.0, _estimated_cycle_duration(1, speed) * 3 + 2.0)
+            before = _cycles_run(control)
+            _queue_command(control, move)
+            time.sleep(0.15)
+            # One fewer than asked: the stop must be queued while the final
+            # cycle is still running (see the walk tool for the reasoning).
+            _wait_for_cycles(
+                control,
+                max(0, cycles - 1),
+                budget * cycles,
+                fallback_s=_estimated_cycle_duration(1, speed) * cycles,
+            )
+            _queue_command(control, [cmd.CMD_MOVE, "1", "0", "0", str(speed), "0"])
+            _wait_for_clear(control)
+            done = _cycles_run(control) - before
+        finally:
+            control.stride_limit = 35
+            control.gait_lift = 40
+
+        measured = getattr(control, "last_cycle_s", 0.0)
+        est = f", ~{stride / measured / 10:.0f}cm/s" if measured else ""
+        return True, (
+            f"Sprinted {done} cycles at stride {stride}mm, lift {lift}mm, speed {speed}"
+            + (f", {measured:.2f}s/cycle" if measured else "")
+            + est
+            + (f", short of the {cycles} asked for" if done < cycles else "")
+            + ". Stopped standing in neutral."
+        )
 
     def turn_to(self, degrees, tolerance=None) -> str:
         """Rotate in place by `degrees`, closed-loop on the z gyro.
@@ -1695,6 +1791,28 @@ def main() -> None:
                         run = {"fight": hw.fight, "hypno_wave": hw.hypno_wave,
                                "dance": hw.dance}[name]
                         applied, text = run()
+                    node.send_output(
+                        "tool_result",
+                        encode(
+                            {
+                                "id": call.get("id"),
+                                "name": name,
+                                "text": text,
+                                "refused": not applied,
+                            }
+                        ),
+                    )
+                    continue
+
+                # sprint is served here: it composes the wide stance, a
+                # temporarily raised stride clamp and the gait loop, all of
+                # which live on this side of the boundary.
+                if name == "sprint":
+                    refusal = hw.motion_refusal(name, args)
+                    if refusal is not None:
+                        applied, text = False, refusal
+                    else:
+                        applied, text = hw.sprint(args.get("cycles", 6))
                     node.send_output(
                         "tool_result",
                         encode(

@@ -134,6 +134,7 @@ TOOL_OWNER: Dict[str, str] = {
     "approach": "hardware",
     "fight": "hardware",
     "hypno_wave": "hardware",
+    "sprint": "hardware",
     "set_led": "led",
     "buzz": "buzzer",
     "get_distance": "ultrasonic",
@@ -156,6 +157,7 @@ MOTION_TOOLS = {
     "approach",
     "fight",
     "hypno_wave",
+    "sprint",
 }
 
 
@@ -231,6 +233,30 @@ def hypno_wave_tool_schema() -> Dict[str, Any]:
                 "then stands back up. Purely theatrical — it does not travel."
             ),
             "parameters": {"type": "object", "properties": {}},
+        },
+    }
+
+
+def sprint_tool_schema() -> Dict[str, Any]:
+    """OpenAI tool schema for sprint, appended to the upstream TOOLS list."""
+    return {
+        "type": "function",
+        "function": {
+            "name": "sprint",
+            "description": (
+                "Run forward as fast as possible: top gait speed with an "
+                "extended stride — notably faster than walk at speed 10. "
+                "TRAVELS FORWARD; make sure the way ahead is clear."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "cycles": {
+                        "type": "integer",
+                        "description": "Gait cycles to run (1-12, default 6). Roughly 5cm each.",
+                    }
+                },
+            },
         },
     }
 

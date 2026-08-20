@@ -179,7 +179,8 @@ from src.gait_profile import swing_height_a, swing_height_b  # noqa: E402
 
 
 def simulate_gait_reach(
-    stance: Stance, x: int = 0, y: int = 0, angle: int = 0, speed: int = 6
+    stance: Stance, x: int = 0, y: int = 0, angle: int = 0, speed: int = 6,
+    lift: float = GAIT_LIFT_MM,
 ) -> Tuple[float, float]:
     """Worst-case leg reach over one tripod gait cycle in this stance, offline.
 
@@ -225,8 +226,8 @@ def simulate_gait_reach(
         # Height from the phase, calling the gait engine's own profile. Worst
         # case for reach is a swing that begins already raised, so first_cycle
         # is False.
-        lift_a = body_height + GAIT_LIFT_MM * swing_height_a(j, f_frames)
-        lift_b = body_height + GAIT_LIFT_MM * swing_height_b(j, f_frames, False)
+        lift_a = body_height + lift * swing_height_a(j, f_frames)
+        lift_b = body_height + lift * swing_height_b(j, f_frames, False)
         for i in range(3):
             if j < (f_frames / 8):
                 points[2 * i][0] -= 4 * xy[2 * i][0]
@@ -270,12 +271,13 @@ def validate_for_gait(
     angle: int = 0,
     speed: int = 6,
     margin: float = REACH_MARGIN_MM,
+    lift: float = GAIT_LIFT_MM,
 ) -> Tuple[bool, float, float, str]:
     """Check a stance stays reachable while walking. (ok, min, max, reason)."""
     ok, _, reason = validate(stance, margin)
     if not ok:
         return False, 0.0, 0.0, f"static pose already invalid: {reason}"
-    lo, hi = simulate_gait_reach(stance, x, y, angle, speed)
+    lo, hi = simulate_gait_reach(stance, x, y, angle, speed, lift)
     low, high = MIN_REACH_MM + margin, MAX_REACH_MM - margin
     if hi > high:
         return False, lo, hi, (

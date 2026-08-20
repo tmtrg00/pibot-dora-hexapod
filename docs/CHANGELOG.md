@@ -7,6 +7,44 @@ revert an old entry.
 
 ---
 
+## 2026-08-20 — A sprint: forward dash at extended stride, tuned on hardware through three iterations — and the stride clamp and swing lift are now parameters
+
+The robot can run. `sprint` (hardware node tool, LLM schema in common.py, 20 schemas total;
+`./run.sh sprint` = `dataflow-sprint.yml` + `nodes/sprint_test_node.py`, LOCOMOTION ~30cm at
+the default 6 cycles) dashes forward at gait speed 9 with a 50mm stride and 60mm swing lift,
+in the neutral stance. The stride is found at call time by descending search through the same
+offline gait simulation the stance walks use, now with a `lift` parameter threaded through
+`simulate_gait_reach`/`validate_for_gait`.
+
+Two fork changes in src/control.py, both defaulting to upstream behaviour: the run_gait
+stride clamp (hard-coded ±35) is now `Control.stride_limit`, and the swing lift (the Z=40
+parameter nothing ever passed) is now `Control.gait_lift`. The sprint raises both for the
+dash and restores them in a `finally`.
+
+Three owner-watched iterations, each a lesson:
+
+**Decision:** the sprint runs in the NEUTRAL stance, not wide. The first version used wide
+(validates strides to 65mm vs neutral's 50mm) and the feet skated "as if on ice" — splayed
+legs thrust outward as much as backward at sprint cadence, and shear beats grip. Neutral
+keeps the feet under the body pushing near-vertically; its 50mm stride is still +43% over
+the clamp.
+
+**Decision:** speed 9, not 10, and more lift is NOT the fix for feet skimming the floor. At
+speed 10 the swing phase is ~5 frames — less time than the leg servos can physically track —
+so raising the commanded lift from 40 to 60mm changed nothing (the second run looked even
+lower; battery was healthy at 7.4V, ruling out sag). The limit was time, not amplitude:
+speed 9 gives the swing ~60% more frames. Known residual: the achieved lift still reads low
+to the eye even at speed 9 — the servos are slew-bound at sprint cadence and only a slower
+cadence would lift higher, which stops being a sprint. Accepted as-is.
+
+Plain-language summary: the robot now has a proper run — noticeably faster than its walk,
+with longer strides. Getting there took three watched attempts: first it skated like it was
+on ice (stance too wide — fixed by keeping its feet under itself), then raising its steps
+higher did nothing because its leg motors simply cannot move that fast (fixed by slowing the
+rhythm one notch so the legs can keep up). Its steps still stay closer to the floor than a
+walk's — that is the motors' physical speed limit, and we have accepted it. The voice
+command "sprint" works, and it refuses on a low battery like everything else.
+
 ## 2026-08-20 — A real dance: the body grooves over planted feet, replacing the upstream roll-rock under the same tool name
 
 Third choreography of the day, owner-verified on hardware first try. `nodes/dance.py`

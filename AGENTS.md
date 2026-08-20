@@ -166,6 +166,7 @@ bin/py               Node launcher; forces the venv interpreter (RUNBOOKS §2)
 ./run.sh fight      # sparring gesture: rears onto four legs, jabs with the front pair (does not travel)
 ./run.sh hypno      # belly-sat display: all six legs ripple in the air (does not travel)
 ./run.sh dance      # body grooves over planted feet: bounce, sway, circle, twist, bow (does not travel)
+./run.sh sprint     # fast forward dash, extended stride in neutral stance (LOCOMOTION — travels ~30cm)
 ./run.sh idlereset  # stance returns to neutral once the robot stops
 ./run.sh camera     # capture attempts only
 ./run.sh            # full autonomous graph, the equivalent of the original main.py

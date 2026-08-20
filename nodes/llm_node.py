@@ -34,6 +34,7 @@ from common import (
     encode,
     fight_tool_schema,
     hypno_wave_tool_schema,
+    sprint_tool_schema,
     get_logger,
     load_config,
     stance_tool_schema,
@@ -68,6 +69,7 @@ TOOL_SCHEMAS = list(TOOLS) + [
     approach_tool_schema(),
     fight_tool_schema(),
     hypno_wave_tool_schema(),
+    sprint_tool_schema(),
 ]
 
 

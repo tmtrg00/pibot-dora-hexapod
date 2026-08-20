@@ -1,0 +1,28 @@
+# Sprint test graph. LOCOMOTION — the robot TRAVELS forward fast (~5cm per
+# cycle, default 6 cycles). Needs servo power, a charged pack and at least a
+# metre of clear floor ahead.
+#
+#   ./run.sh sprint
+#   PIBOT_SPRINT_CYCLES=10 ./run.sh sprint
+
+nodes:
+  - id: hardware
+    path: bin/py
+    args: nodes/hardware_node.py
+    inputs:
+      tick: dora/timer/millis/1000
+      tool_call: sprint_test/tool_call
+    outputs:
+      - battery
+      - health
+      - tool_result
+
+  - id: sprint_test
+    path: bin/py
+    args: nodes/sprint_test_node.py
+    inputs:
+      tick: dora/timer/millis/250
+      tool_result: hardware/tool_result
+      battery: hardware/battery
+    outputs:
+      - tool_call

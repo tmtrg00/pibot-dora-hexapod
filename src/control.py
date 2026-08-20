@@ -67,6 +67,17 @@ class Control:
         # only ever read elsewhere.
         self.gait_cycles = 0
         self.last_cycle_s = 0.0
+        # Stride clamp for run_gait, mm. 35 is the upstream hard-coded bound
+        # and stays the default: at top cadence the NEUTRAL stance cannot
+        # validate much beyond it (the swing leg dips under minimum reach).
+        # The sprint raises it temporarily — only after validating the wider
+        # stance + stride combination offline — and restores it after.
+        self.stride_limit = 35
+        # Swing-leg lift for run_gait, mm. 40 is the upstream default (the Z
+        # parameter nothing ever passed). The sprint raises it temporarily so
+        # fast long strides step clear of the floor instead of skimming it;
+        # offline validation shows lift barely moves the reach envelope.
+        self.gait_lift = 40
         # True while a tripod is in the air, which is how every gait cycle
         # ends. Lets the next cycle carry straight on from mid-swing, and lets
         # a stop lower those legs instead of dropping them.
@@ -439,10 +450,12 @@ class Control:
             time.sleep(0.01)
         self.swing_raised = False
 
-    def run_gait(self, data, Z=40, F=64):  # Example: data=['CMD_MOVE', '1', '0', '25', '10', '0']
+    def run_gait(self, data, Z=None, F=64):  # Example: data=['CMD_MOVE', '1', '0', '25', '10', '0']
+        if Z is None:
+            Z = getattr(self, "gait_lift", 40)
         gait = data[1]
-        x = self.restrict_value(int(data[2]), -35, 35)
-        y = self.restrict_value(int(data[3]), -35, 35)
+        x = self.restrict_value(int(data[2]), -self.stride_limit, self.stride_limit)
+        y = self.restrict_value(int(data[3]), -self.stride_limit, self.stride_limit)
         if gait == "1":
             F = round(self.map_value(int(data[4]), 2, 10, 126, 22))
         else:

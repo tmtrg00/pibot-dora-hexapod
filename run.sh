@@ -45,6 +45,7 @@ case "${1:-full}" in
   fight)    DATAFLOW="dataflow-fight.yml" ;;
   hypno)    DATAFLOW="dataflow-hypno.yml" ;;
   dance)    DATAFLOW="dataflow-dance.yml" ;;
+  sprint)   DATAFLOW="dataflow-sprint.yml" ;;
   *)        DATAFLOW="$1" ;;
 esac
 
