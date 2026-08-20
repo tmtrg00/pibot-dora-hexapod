@@ -7,6 +7,62 @@ revert an old entry.
 
 ---
 
+## 2026-08-20 — The turn overshoot was the body settling after the stop, not the planner; compensating for it moves smoothturn from FAIL to PASS
+
+The turn overshoot open since 2026-08-19 (every `turn_to` landing ~4deg past target, both
+directions, every size) is fixed. The previous two attempts at this loop were made on inference
+and one made things worse, so this time the loop was instrumented before anything was changed.
+
+**Diagnostic first.** `turn_to` now samples the heading at three points instead of one: what
+the in-flight cycle was predicted to land at when the stop fired, where that cycle actually
+finished, and where the robot settled. That splits the residual into a *prediction error* (the
+cycle landing somewhere other than `per_unit` predicted) and a *post-stop settle* (rotation
+after the stop decision — the foot-reset cycle, the body settling, the gyro integrating through
+set-down). One instrumented `smoothturn` run (8 turns, +/-90/+/-180/+/-20) was decisive: the
+post-stop settle was a consistent 2.5-3.8deg (mean 3.35), **always in the direction of the
+turn**, on every one of the eight turns, while the prediction error was smaller and unbiased.
+So the overshoot is the settle, and the cheapest of the three options in PENDING — reverting
+`plan()` to truncating — would have chased the wrong term.
+
+**Fix:** new `TURN_SETTLE_DEG` (default 3.35, `PIBOT_TURN_SETTLE_DEG` to override). `turn_to`
+now aims the closed loop at `stop_target = target - settle` and lets the settle carry the robot
+the rest of the way, rather than aiming at the true target and landing past it every time. The
+compensation is skipped for turns smaller than `tol + settle`, where subtracting it would aim
+inside the tolerance band and let the loop stop before the robot has meaningfully turned; those
+keep aiming at the true target as before. The stop check, the endgame planner and the opening
+cycle all reference `stop_target`.
+
+**Verified on hardware.** The next `smoothturn` run went from the prior **OUT OF TOLERANCE**
+(worst residual 7.9deg, verdict FAIL) to **PASS** (worst 4.2deg against the 5deg tolerance).
+The turns that had been the worst offenders improved the most: B1 -180 went +5.1 -> +0.5, B2
++180 went -7.5 -> +1.0, C1 +20 went -7.2 -> -1.6. Seven of the eight turns ran (the run was
+stopped by hand before the final -20 left turn; +20 and -180 both ran, so small and left-hand
+turns are each covered).
+
+**Known residual, left deliberately:** the +90 quarter-turns still land -2.6 to -4.2deg,
+improved only modestly. The diagnostic shows why — for the quarter-turns the in-flight cycle's
+prediction error is a consistent +2-3deg (the `per_unit` estimate reads slightly low at the
+endgame), which the settle compensation does not touch. It is within tolerance but with less
+margin than the larger turns. This is the smaller of the two causes named in the original
+analysis, now isolated. Not chased here: it is inside tolerance, and tightening it risks the
+hunting that an earlier version of this loop showed (CHANGELOG 2026-08-19).
+
+The three-point diagnostic was kept in the code rather than removed — it prints one line per
+turn reporting the settle and prediction error that turn actually produced, which is what any
+future work on the quarter-turn residual will need, and it costs only a short wait during the
+stop the robot is already performing.
+
+Plain-language summary: when the robot was told to turn, say, 90 degrees, it always turned
+about 94 — a steady 4-degree overshoot every time. Rather than guess at the cause again (two
+earlier guesses had already been made, one of them wrong), the turn was first fitted with
+instruments that measured exactly where the extra rotation came in. The answer was clear: the
+robot keeps drifting a few degrees in the direction it was turning *after* it has decided to
+stop, as its legs reset and its body settles. The fix simply tells it to stop that few degrees
+early so the drift lands it on target. On the robot this turned a failing accuracy test into a
+passing one. One kind of turn — the quarter-turn — still overshoots by three to four degrees
+for a different, smaller reason, but it now stays inside the allowed tolerance, so it was left
+alone rather than risk reintroducing an old wobble.
+
 ## 2026-08-20 — Approach re-verified on hardware: retreat works for the first time, forward accuracy is worse than hoped, and the graph doesn't exit on its own
 
 Ran `./run.sh approach` twice, chasing the accuracy re-check PENDING had open since 2026-08-19.

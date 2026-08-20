@@ -81,6 +81,18 @@ TURN_SEED_DEG_PER_ANGLE_UNIT = 3.3
 TURN_TOLERANCE_DEG = 5.0
 TURN_SPEED = int(os.environ.get("PIBOT_TURN_SPEED", "6"))
 
+# After turn_to decides to stop, the robot keeps rotating a little further in
+# the direction of the turn — the foot-reset stop cycle plus the body settling
+# once the gait halts. Instrumented on 2026-08-20 (CHANGELOG): across eight
+# turns of +/-90, +/-180 and +/-20, this post-stop drift was a consistent
+# 2.5-3.8deg (mean 3.35), always with the turn, while the in-flight cycle's
+# own prediction error was smaller and unbiased. So the overshoot is the
+# settle, not the planner, and turn_to aims to stop this many degrees short of
+# the true target and let the settle carry it the rest of the way. Override
+# only after re-measuring on this robot; the diagnostic line turn_to prints
+# reports the settle each turn actually produced.
+TURN_SETTLE_DEG = float(os.environ.get("PIBOT_TURN_SETTLE_DEG", "3.35"))
+
 # How often a turn samples yaw. Shorter than the heading-hold interval on
 # purpose. A turn measures its own degrees-per-angle-unit by watching how far
 # the body moved over one gait cycle, and it can only notice a cycle boundary
@@ -512,6 +524,19 @@ class Hardware:
                 f"{tol:.1f}deg tolerance, not moving"
             )
 
+        # Aim the closed loop at `stop_target`, short of the true target by the
+        # known post-stop settle (TURN_SETTLE_DEG), so the settle lands the
+        # robot on target rather than past it. Only for turns large enough that
+        # this still leaves the aim point clear of the tolerance band: below
+        # tol + settle, subtracting the settle would aim inside tolerance of
+        # zero, letting the loop stop before the robot has meaningfully turned,
+        # and the gait's ~2.7deg-per-unit granularity dominates a turn that
+        # small anyway. Those keep aiming at the true target, exactly as before.
+        if abs(target) > tol + TURN_SETTLE_DEG:
+            stop_target = target - math.copysign(TURN_SETTLE_DEG, target)
+        else:
+            stop_target = target
+
         control = self.control
         cycle_s = cycle_duration_estimate(1, TURN_SPEED)
 
@@ -573,7 +598,7 @@ class Hardware:
         # to correct it — a seed 65% low would overshoot a small turn outright.
         # Halving bounds that, and costs nothing on a large turn, where half
         # the target still saturates the maximum steering angle.
-        applied = plan(target / 3.0)
+        applied = plan(stop_target / 3.0)
         angle_running = applied
         outcome = "reached tolerance"
         turned_right = 0.0
@@ -584,6 +609,18 @@ class Hardware:
         last_heartbeat = time.monotonic()
         stalled_cycles = 0
         units_commanded = 0
+
+        # Diagnostic only (PENDING 2026-08-19, the turn overshoot): split the
+        # landing error into "the in-flight cycle's predicted end point was
+        # wrong" versus "rotation happened after the stop decision that
+        # nothing predicted" (the foot-reset cycle, settling, or the gyro
+        # integrating through set-down). Neither changes what the robot does;
+        # they only get logged. `decision_predicted_end` is set at the stop
+        # decision; `cycle_end_yaw` (below) is sampled once the in-flight
+        # cycle's boundary is actually crossed, before the foot-reset stop
+        # cycle runs.
+        decision_predicted_end = None
+        cycles_at_decision = None
 
         tracker.start()
         queue(applied)
@@ -634,7 +671,7 @@ class Hardware:
                 if now - boundary_at < TURN_POLL_S:
                     still_coming = 0.0
                 predicted_end = turned_right + still_coming
-                if abs(target - predicted_end) <= tol:
+                if abs(stop_target - predicted_end) <= tol:
                     # Inside tolerance: stop. Do not try to do better.
                     #
                     # An earlier version continued whenever one more cycle
@@ -649,11 +686,17 @@ class Hardware:
                     #
                     # Tolerance is the contract. Landing 4deg out and stopping
                     # is invisible; hunting for 1deg is not.
+                    settle_note = (
+                        f" (aimed {stop_target - target:+.1f}deg short for the settle)"
+                        if stop_target != target else ""
+                    )
                     logger.info(
                         f"turn_to: stopping — the cycle in flight lands "
-                        f"{target - predicted_end:+.1f}deg from target, inside the "
-                        f"{tol:.0f}deg tolerance"
+                        f"{stop_target - predicted_end:+.1f}deg from the aim point, "
+                        f"inside the {tol:.0f}deg tolerance{settle_note}"
                     )
+                    decision_predicted_end = predicted_end
+                    cycles_at_decision = cycles_seen
                     break
 
                 if now > deadline:
@@ -725,7 +768,7 @@ class Hardware:
                 # the rest of this cycle.
                 angle_running = applied
                 boundary_at = now
-                short_by = target - (turned_right + applied * per_unit)
+                short_by = stop_target - (turned_right + applied * per_unit)
                 if abs(short_by) <= tol:
                     # The cycle that just started already lands inside
                     # tolerance. Leave the queue alone and let the stop check
@@ -744,8 +787,32 @@ class Hardware:
             # Zero stride and zero angle is the single-shot stop: it puts the
             # feet back on the resting footprint and clears the queue, so the
             # turn actually ends rather than running on after this returns.
+            # Queue this immediately, exactly as before diagnostics were
+            # added — it does not interrupt the cycle already in flight
+            # (queue changes only take effect at the next boundary), it only
+            # determines what happens at the boundary AFTER that one. So
+            # queuing it now costs nothing and must not be delayed: waiting
+            # here before queuing the stop would let the gait thread read the
+            # queue at the next boundary and requeue the same turn instead,
+            # adding a real extra cycle of rotation rather than just logging.
             control.command_queue = [cmd.CMD_MOVE, "1", "0", "0", str(TURN_SPEED), "0"]
             control.timeout = time.time()
+
+            # Diagnostic only: sample the heading at the moment the cycle
+            # that was in flight at the stop decision actually finishes —
+            # before the foot-reset stop cycle above has run. Comparing this
+            # to `decision_predicted_end` isolates whether the per-angle-unit
+            # estimate was wrong; comparing it to `final_yaw` below isolates
+            # whatever happens during foot-reset and settling instead.
+            cycle_end_yaw = None
+            if cycles_at_decision is not None and yaw_sign is not None:
+                wait_end = time.monotonic() + cycle_s * 2.0 + 1.0
+                while time.monotonic() < wait_end:
+                    if control.gait_cycles > cycles_at_decision:
+                        cycle_end_yaw = tracker.yaw() * yaw_sign
+                        break
+                    time.sleep(TURN_POLL_S)
+
             end = time.time() + 15.0
             while time.time() < end:
                 queue_now = getattr(control, "command_queue", None)
@@ -758,11 +825,32 @@ class Hardware:
         achieved = final_yaw * yaw_sign if yaw_sign else 0.0
         battery = self.last_battery
         battery_txt = f", battery {battery[0]:.2f}V/{battery[1]:.2f}V" if battery else ""
+
+        # Diagnostic only (PENDING 2026-08-19): break the residual into where
+        # it came from, when the normal tolerance-stop path ran and a full
+        # set of samples was captured. `prediction_error` is the in-flight
+        # cycle landing somewhere other than `per_unit` predicted; `post_stop`
+        # is rotation measured between that landing and the fully settled
+        # `achieved`, covering the foot-reset cycle, body settling and any
+        # gyro integration through set-down.
+        diag_txt = ""
+        if decision_predicted_end is not None and cycle_end_yaw is not None:
+            prediction_error = cycle_end_yaw - decision_predicted_end
+            post_stop = achieved - cycle_end_yaw
+            diag_txt = (
+                f" diagnostic: in-flight cycle predicted to land at "
+                f"{decision_predicted_end:+.1f}deg, actually landed at "
+                f"{cycle_end_yaw:+.1f}deg (prediction error {prediction_error:+.1f}deg), "
+                f"then {post_stop:+.1f}deg more during foot-reset/settling."
+            )
+        elif decision_predicted_end is not None:
+            diag_txt = " diagnostic: cycle-end sample missed, only the decision point was captured."
+
         return (
             f"turn_to {outcome}: target {target:+.1f}deg, rotated {achieved:+.1f}deg "
             f"(residual {target - achieved:+.1f}deg) in one continuous turn, "
             f"measured {per_unit:.1f}deg per angle unit per cycle{battery_txt}{note}. "
-            f"{tracker.health()}"
+            f"{tracker.health()}{diag_txt}"
         )
 
     def walk_straight(self, direction, cycles, speed, heading=None, gain=None) -> str:
