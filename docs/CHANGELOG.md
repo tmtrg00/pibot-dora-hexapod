@@ -7,6 +7,42 @@ revert an old entry.
 
 ---
 
+## 2026-08-20 — Head tilt calibrated by eye (level is servo +30, up is up), and the "collapsing battery" was real: the servo pack drained while the charger sat on the wrong one
+
+Two results from the evening session, one good and one humbling.
+
+**The calibration.** The owner watched `test/test_head_tilt_cal.py` sweep raw servo tilt from
+-45 to +45 in 15deg steps and reported: position 6 (raw +30) looked level, counting up moved
+the head up, and the first positions pressed against a mechanical down-stop near raw -30. That
+is written to `data/head_trim.json` as sign +1, trim +30deg — so commanded tilt 0 now maps to
+servo 120, physical level. From level the head can look down about 45deg and up at least
+15deg. Every caller goes through this mapping (`set_head`, the `move_head` tool, startup and
+approach levelling, the idle re-level), so "level" finally means level for the head-mounted
+ultrasonic too. NOT yet verified: the confirmation run barely moved — see below — so watching
+the calibrated head sit level and look up is still owed.
+
+**The battery.** The ADC's load channel fell 6.65 → 5.41 → 4.47 → 3.71 → 3.12V across the
+afternoon while the pi channel held 7.4V throughout. Working theory of the day was a broken
+voltage-sense line ("the gate refuses on a phantom reading"), because the head demonstrably
+moved at a reading of 3.24V. That theory was wrong, and the movement quality said so: strong
+at 6.9-7.2V (morning motion graph), weak but visible at 3.24V (micro servos, head only), a
+whine and barely a twitch at 3.12V. The load channel tracks the SERVO pack; the pi channel
+tracks the Pi's pack — they are separate batteries, the robot ran the servo pack down over
+the session's runs, and the recharge attempt almost certainly went onto the (already full) Pi
+pack. **Decision:** the load-channel reading is trusted again; the "phantom sense line"
+hypothesis from mid-session is retracted. Bypassing the gate (floor lowered, then 0) was done
+at explicit owner instruction for head-only loads and is what produced the diagnostic voltage
+trail — but the last two runs at ~3.2V drove servos that could only whine, which is exactly
+what the gate exists to prevent. Charge the SERVO pack before any further motion.
+
+Plain-language summary: the robot's head was aiming 30 degrees below level whenever the code
+asked for "straight ahead", because the servo was assembled with its centre pointing down. The
+owner watched a sweep and told us which position looked level, and that correction is now
+saved — the head will hold truly level and can genuinely look up for the first time. Separately,
+the battery warnings all afternoon were real: the robot has two batteries, the one that powers
+the motors ran flat during testing, and the charger was likely connected to the other one,
+which was already full. The motor battery needs charging before the robot moves again.
+
 ## 2026-08-20 — The head ramp made lifelike: eased S-curve motion at a speed, replacing the fixed six-step ramp the owner saw snap
 
 The owner watched `test/test_head.py` and reported the pan sweeps "very quick, not really
