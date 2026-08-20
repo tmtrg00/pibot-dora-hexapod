@@ -133,6 +133,7 @@ TOOL_OWNER: Dict[str, str] = {
     "walk_straight": "hardware",
     "approach": "hardware",
     "fight": "hardware",
+    "hypno_wave": "hardware",
     "set_led": "led",
     "buzz": "buzzer",
     "get_distance": "ultrasonic",
@@ -154,6 +155,7 @@ MOTION_TOOLS = {
     "walk_straight",
     "approach",
     "fight",
+    "hypno_wave",
 }
 
 
@@ -206,6 +208,27 @@ def fight_tool_schema() -> Dict[str, Any]:
                 "guard, throws a few alternating jabs, and returns to normal "
                 "standing. Purely theatrical — it does not travel or touch "
                 "anything."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+
+
+def hypno_wave_tool_schema() -> Dict[str, Any]:
+    """OpenAI tool schema for hypno_wave, appended to the upstream TOOLS list.
+
+    Like fight, the choreography is this project's work (nodes/hypno.py) and
+    the upstream tool list stays untouched.
+    """
+    return {
+        "type": "function",
+        "function": {
+            "name": "hypno_wave",
+            "description": (
+                "Perform a mesmerising resting display: the robot settles down "
+                "onto its belly, lifts all six legs off the ground and waves "
+                "them in a slow hypnotic ripple that travels around its body, "
+                "then stands back up. Purely theatrical — it does not travel."
             ),
             "parameters": {"type": "object", "properties": {}},
         },

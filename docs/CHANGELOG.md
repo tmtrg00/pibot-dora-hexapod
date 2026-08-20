@@ -7,6 +7,41 @@ revert an old entry.
 
 ---
 
+## 2026-08-20 — The hypno wave: the robot sits on its belly and ripples all six legs in a travelling, hypnotic wave
+
+Second choreography of the day, owner-requested and owner-verified on hardware in two
+iterations. `nodes/hypno.py` holds the routine — standalone by explicit owner instruction,
+with its own easing/interpolation/reach maths rather than importing fight.py's; the two share
+only the geometry constants in stances.py. Served by the hardware node as a `hypno_wave` tool
+through a `_run_choreography` harness now shared with `fight` (neutral-stance precondition,
+gait-queue-idle wait, post-run validity check); the LLM sees it via `hypno_wave_tool_schema()`
+(19 tool schemas); `./run.sh hypno` (`dataflow-hypno.yml` + `nodes/hypno_test_node.py`) is the
+watchable graph. Env: `PIBOT_HYPNO_CYCLES` (default 4), `PIBOT_HYPNO_PERIOD_S` (default 2.0s),
+`PIBOT_HYPNO_AMP_MM` (default 14), `PIBOT_HYPNO_FRAME_S`.
+
+The sequence: the body sinks until the chassis rests on the ground (feet end 5mm above the
+standing plane, so the belly definitively carries the weight — which is the safety story:
+unloaded legs cannot tip anything), all six legs lift to a 25mm hover and ripple with each leg
+60deg of phase behind its neighbour. body_points orders the legs clockwise around the chassis,
+so the ripple visibly travels around the robot; each foot traces an ellipse (14mm lift, 12mm
+radial breathe, a quarter-cycle apart). ~14s, every frame reach-validated offline, battery-
+gated via MOTION_TOOLS.
+
+**Decision:** after the owner asked for more fluidity, the stage-by-stage smoothstep (which
+brings every joint to a halt at every keyframe) was replaced for this routine by chained
+easing — one smoothstep over the whole descent/ascent path, interior waypoints passed at
+speed — and the wave is entered and left through an amplitude envelope that fades over one
+period, replacing discrete entry/exit keyframes. Verified continuous: 701 frames, worst
+per-frame foot travel 0.88mm (44mm/s peak) including both seams. fight.py keeps per-segment
+easing deliberately — its keyframes are distinct gestures where the stop is the point.
+
+Plain-language summary: the robot has a new resting display — it lies down flat on its belly,
+raises all six legs into the air and waves them in a slow, mesmerising ripple that circles
+its body, like a sea creature, then pushes back up to standing. Because its belly is on the
+ground the whole time it is waving, it cannot fall over. The first version moved in visible
+stages; it now sinks, waves and rises in one unbroken flowing motion. The voice assistant can
+trigger it, and it refuses on a low battery like every other movement.
+
 ## 2026-08-20 — A fight move: the robot steps its middle feet forward, rears onto four legs and jabs with the front pair
 
 New choreography, built in three rounds of owner-watched iteration on hardware.

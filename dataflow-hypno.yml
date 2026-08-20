@@ -1,0 +1,28 @@
+# Hypno wave test graph. MOVES THE ROBOT (settles onto its belly and waves
+# all six legs in the air), but it never travels. Needs servo power, a charged
+# pack and clear space around every leg.
+#
+#   ./run.sh hypno
+#   PIBOT_HYPNO_CYCLES=8 PIBOT_HYPNO_PERIOD_S=3.0 ./run.sh hypno
+
+nodes:
+  - id: hardware
+    path: bin/py
+    args: nodes/hardware_node.py
+    inputs:
+      tick: dora/timer/millis/1000
+      tool_call: hypno_test/tool_call
+    outputs:
+      - battery
+      - health
+      - tool_result
+
+  - id: hypno_test
+    path: bin/py
+    args: nodes/hypno_test_node.py
+    inputs:
+      tick: dora/timer/millis/250
+      tool_result: hardware/tool_result
+      battery: hardware/battery
+    outputs:
+      - tool_call

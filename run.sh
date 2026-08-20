@@ -43,6 +43,7 @@ case "${1:-full}" in
   approach) DATAFLOW="dataflow-approach.yml" ;;
   attitude) DATAFLOW="dataflow-attitude.yml" ;;
   fight)    DATAFLOW="dataflow-fight.yml" ;;
+  hypno)    DATAFLOW="dataflow-hypno.yml" ;;
   *)        DATAFLOW="$1" ;;
 esac
 
