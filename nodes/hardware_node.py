@@ -52,6 +52,7 @@ from heading import (  # noqa: E402
 
 from dora import Node  # noqa: E402
 from src.actions import execute as run_action  # noqa: E402
+from src.actions import release_head  # noqa: E402
 from src.adc import ADC  # noqa: E402
 from src.command import COMMAND as cmd  # noqa: E402
 from src.control import Control  # noqa: E402
@@ -295,6 +296,12 @@ class Hardware:
         # predicted the in-flight cycle would deliver. None except in the short
         # window between a stop and its settled reading. Does not affect motion.
         self.approach_diag: Optional[dict] = None
+        # One persistent dict for run_action, refreshed by the hardware_dict
+        # property. actions.py keeps cross-call state in this dict — the head
+        # auto-relax cancellation token and the last commanded head position —
+        # so handing it a fresh dict per call would make a pending head release
+        # uncancellable and leave the head ramp with no start point.
+        self._hardware_dict: dict = {}
 
         # ADC first and on its own: it is the one device we must be able to
         # read *before* deciding whether it is safe to energise the servos.
@@ -339,13 +346,23 @@ class Hardware:
             logger.warning(f"Hexapod control unavailable: {exc}")
             self.control = None
 
+        # Level the head so its pose is a state the code enforces, not
+        # whatever hands or gravity last left it in. The ultrasonic rides on
+        # the head, so head tilt IS sensor aim — a hand-tilted head faked an
+        # approach overshoot that took two days to disprove (CHANGELOG
+        # 2026-08-20). Default auto-relax applies: move, hold briefly, release,
+        # per the buzz-and-heat scar behind the auto-relax default.
+        if self.control is not None:
+            result = run_action("move_head", {"pan": 0, "tilt": 0}, self.hardware_dict)
+            logger.info(f"head levelled at startup: {result}")
+
     @property
     def hardware_dict(self) -> dict:
-        return {
-            "control": self.control,
-            "servo": self.control.servo if self.control is not None else None,
-            "adc": self.adc,
-        }
+        d = self._hardware_dict
+        d["control"] = self.control
+        d["servo"] = self.control.servo if self.control is not None else None
+        d["adc"] = self.adc
+        return d
 
     def read_battery(self, force: bool = False) -> Optional[Tuple[float, float]]:
         if self.adc is None:
@@ -1142,6 +1159,17 @@ class Hardware:
         control = self.control
         run_action("stand", {}, self.hardware_dict)
 
+        # The ultrasonic rides on the head, so the approach is only as
+        # accurate as the head is level — a sagged tilt reads long and sparse
+        # and faked an 8.3cm overshoot (CHANGELOG 2026-08-20). Level it and
+        # HOLD torque for the whole approach so gait vibration cannot walk it
+        # off aim; `finish_approach` releases it. Before the gyro calibration,
+        # which needs a motionless robot.
+        run_action(
+            "move_head", {"pan": 0, "tilt": 0, "auto_relax": False}, self.hardware_dict
+        )
+        logger.info("approach: head levelled, torque held until the approach ends")
+
         tracker = YawTracker(control.imu.sensor)
         tracker.calibrate(1.0)
         tracker.start()
@@ -1374,6 +1402,10 @@ class Hardware:
                 break
             time.sleep(0.05)
         final_yaw = state.tracker.stop()
+        # The head held torque for the approach (start_approach); the walking
+        # is over, so let it relax again. Friction keeps it level while still.
+        if control.servo is not None:
+            release_head(control.servo, self.hardware_dict)
         self.last_motion_at = time.time()
 
         cycles = control.gait_cycles - state.started_cycles if state.walking else 0
@@ -1416,7 +1448,14 @@ class Hardware:
         # surprise them and draw current they were trying to save.
         if self.relaxed:
             return None
-        if self.applied_stance == "neutral":
+        # The head is part of the resting pose too: a head left panned or
+        # tilted keeps the camera and the head-mounted ultrasonic aimed
+        # somewhere nobody chose, and sensor aim is exactly what the approach
+        # depends on. (90, 90) is level; None means never commanded, which
+        # startup levelling makes rare, and an unknown position is left alone.
+        head_xy = self._hardware_dict.get("_head_xy")
+        head_off_level = head_xy is not None and head_xy != (90, 90)
+        if self.applied_stance == "neutral" and not head_off_level:
             return None
         if time.time() - self.last_motion_at < IDLE_STANCE_RESET_S:
             return None
@@ -1425,13 +1464,21 @@ class Hardware:
         if refusal is not None:
             return None
 
+        acted = []
         previous = self.applied_stance
-        ok, text = self.apply_stance("neutral")
+        if previous != "neutral":
+            ok, text = self.apply_stance("neutral")
+            if ok:
+                acted.append(f"reset stance {previous!r} -> 'neutral'")
+            else:
+                logger.warning(f"idle stance reset from {previous!r} failed: {text}")
+        if head_off_level:
+            run_action("move_head", {"pan": 0, "tilt": 0}, self.hardware_dict)
+            acted.append("re-levelled the head")
         self.last_motion_at = time.time()
-        if not ok:
-            logger.warning(f"idle stance reset from {previous!r} failed: {text}")
+        if not acted:
             return None
-        return f"idle for {IDLE_STANCE_RESET_S:.0f}s, reset stance {previous!r} -> 'neutral'"
+        return f"idle for {IDLE_STANCE_RESET_S:.0f}s, " + " and ".join(acted)
 
     def motion_refusal(self, tool_name: str, args: dict) -> Optional[str]:
         """Return a refusal string if this motion command must not run."""

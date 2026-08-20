@@ -7,6 +7,57 @@ revert an old entry.
 
 ---
 
+## 2026-08-20 — Head movement made deliberate: ramped moves, code-enforced levelling, and torque held while the approach aims through it
+
+The head (camera pan/tilt on PCA9685 0x41 channels 0/1) carries the ultrasonic sensor, so head
+tilt IS sensor aim — and a hand-tilted head is what faked the 8.3cm approach overshoot resolved
+earlier today. Until now the head's pose was never a state the code owned: `move_head` slammed
+the servos to the target in one full-speed write, torque auto-released 0.4s later, and nothing
+ever commanded the head at startup, before an approach, or at idle — its position was whatever
+hands, gravity, or gait vibration last left it. Four changes close that:
+
+- **Ramped motion.** `set_head()` in `src/actions.py` interpolates from the last commanded
+  position over `PIBOT_HEAD_RAMP_STEPS` steps (default 6) with `PIBOT_HEAD_RAMP_PAUSE_S`
+  between them (default 0.02s, ~120ms for a full sweep); steps=1 restores the old jump. The
+  first move after power-up still jumps — there is nothing to ramp from.
+- **Levelling enforced in code.** The hardware node commands `pan=0, tilt=0` at startup (with
+  the normal brief-hold-then-relax) and again at the start of every approach — there with
+  `auto_relax=False`, holding torque for the whole approach so gait vibration cannot walk the
+  sensor off aim, released in `finish_approach`. The manual "owner levelled the sensor" fix is
+  now a state the software asserts.
+- **Idle re-level.** `idle_stance_reset` now also returns a panned/tilted head to level when
+  the idle interval expires, alongside the existing stance reset. A head whose position was
+  never commanded (unknown) is left alone. The idlereset test graph gained a step that turns
+  the head aside so this is watchable.
+- **A latent release-token bug fixed on the way.** `Hardware.hardware_dict` built a fresh dict
+  on every access, but `actions.py` stores the head auto-relax cancellation token in that dict
+  — so a pending release could never be cancelled from this node, and a hold-torque head move
+  could have its torque silently dropped by an earlier move's release thread. The dict is now
+  persistent, and a `move_head` with `auto_relax=False` explicitly voids any pending release.
+
+The auto-relax default itself is kept: it exists for a real scar (upstream 2026-03-01, the head
+servo buzzing and heating when held). The approach is the one place torque is held, bounded by
+the approach's own duration; everywhere else the discipline is positional — reassert level at
+known moments rather than hold continuously.
+
+**Verified offline, not yet on hardware.** A 13-check harness against a fake servo confirms:
+ramp reaches the target monotonically, clamps hold (pan floors at hardware 50), auto-relax
+fires and invalidates the write cache, a hold-torque move cancels a pending release, and
+`release_head` drops both channels. The battery read 6.65V unloaded at session end — suspect,
+since unloaded reads run about a volt optimistic (pre-flight scar) — so no motion graph was
+run. Still to verify on hardware with a charged pack: `./run.sh motion` (watch the head sweep
+smoothly instead of snapping), `./run.sh approach` (log shows "head levelled, torque held"),
+`./run.sh idlereset` (head returns to level during step 1b).
+
+Plain-language summary: the robot's head — the little pan/tilt mount holding the camera and the
+distance sensor — used to snap to positions at full speed and then go limp, and nothing ever
+put it back to a known position. Since the distance sensor points wherever the head points,
+that's how the sensor ended up tilted at the floor and faked a walking bug earlier today. Now
+the head moves smoothly, the software levels it when the robot starts, holds it firmly level
+while walking up to obstacles, and straightens it out whenever the robot has been idle for a
+while. The logic is fully tested in simulation; a quick check on the real robot is still owed
+once the battery is charged.
+
 ## 2026-08-20 — The approach was never inaccurate: a tilted sensor faked the overshoot, and with the head levelled it stops dead on target
 
 Resolves the approach overshoot (PENDING). The owner levelled the ultrasonic sensor — it had

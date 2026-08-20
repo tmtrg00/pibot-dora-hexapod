@@ -9,6 +9,14 @@ tells you something.
 
 ## Active
 
+- [TODO 2026-08-20] **Verify the head-movement changes on hardware.** The ramped head moves,
+  startup/approach/idle levelling and the release-token fix (CHANGELOG 2026-08-20) are verified
+  offline against a fake servo only. Needs a charged pack: `./run.sh motion` (head should sweep
+  smoothly, not snap), `./run.sh approach` (log should say "head levelled, torque held"), and
+  `./run.sh idlereset` (head turned aside in step 1a' should return to level during 1b).
+  Battery read 6.65V unloaded at the end of that session — likely below the 6.0V floor under
+  load.
+
 - [TODO 2026-08-16] **Verify the full autonomous graph end to end.** Four of the eight nodes
   have never run against real hardware: `audio`, `llm`, `brain` and `buzzer`. The wake word,
   Whisper, GPT-4o, tool dispatch, TTS and barge-in path is entirely unproven. `buzzer` is the

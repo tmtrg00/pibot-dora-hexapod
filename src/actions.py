@@ -6,6 +6,7 @@ TOOLS: OpenAI tool schemas exposed to the LLM.
 execute(): dispatch one tool call against available hardware.
 """
 
+import os
 import threading
 import time
 from typing import Any, Dict, Optional
@@ -233,6 +234,13 @@ ACTION_EMOTIONS = {
 HEAD_SERVO_CHANNELS = (0, 1)
 HEAD_AUTO_RELAX_DEFAULT_S = 0.4
 
+# The head servos used to slam straight to the target in one write — the servo
+# moves as fast as it physically can, which shakes the camera and the
+# head-mounted ultrasonic whose aim the approach depends on. Interpolate
+# instead, like the stance ramp. Steps <= 1 restores the old single-write jump.
+HEAD_RAMP_STEPS = max(1, int(os.environ.get("PIBOT_HEAD_RAMP_STEPS", "6")))
+HEAD_RAMP_PAUSE_S = max(0.0, float(os.environ.get("PIBOT_HEAD_RAMP_PAUSE_S", "0.02")))
+
 
 def _clamp(value: Any, minimum: int, maximum: int) -> int:
     return max(minimum, min(maximum, int(value)))
@@ -341,6 +349,52 @@ def _schedule_head_release(servo: Any, hardware: Dict[str, Any], delay_s: float)
     thread.start()
     hardware["_head_release_thread"] = thread
     return delay_s
+
+
+def cancel_head_release(hardware: Dict[str, Any]) -> None:
+    """Void any pending auto-relax so a hold-torque move stays held.
+
+    The release thread fires unless the token it captured is still current;
+    bumping the token is the cancel. Only works when callers pass the SAME
+    hardware dict across calls — a fresh dict per call leaves the old thread
+    holding the only reference to its token, uncancellable.
+    """
+    hardware["_head_release_token"] = time.time_ns()
+
+
+def release_head(servo: Any, hardware: Dict[str, Any]) -> None:
+    """Drop head servo torque now. The counterpart of auto_relax=False."""
+    cancel_head_release(hardware)
+    for channel in HEAD_SERVO_CHANNELS:
+        _relax_servo_channel(servo, channel)
+
+
+def set_head(servo: Any, hardware: Dict[str, Any], pan: Any, tilt: Any) -> tuple:
+    """Move the head to (pan, tilt) degrees, ramped. Returns the clamped pair.
+
+    Ramps from the last COMMANDED position, tracked in the hardware dict. After
+    an auto-relax the physical head may have sagged away from that, but the
+    last command is still the best available guess — and the first move after
+    power-up or a full relax (nothing tracked) falls back to the old direct
+    jump, since there is nothing to ramp from.
+    """
+    pan = _clamp(pan, -90, 90)
+    tilt = _clamp(tilt, -90, 90)
+    x = _clamp(90 + pan, 50, 180)
+    y = _clamp(90 + tilt, 0, 180)
+    previous = hardware.get("_head_xy")
+    if previous is not None and HEAD_RAMP_STEPS > 1:
+        px, py = previous
+        for i in range(1, HEAD_RAMP_STEPS + 1):
+            servo.set_servo_angle(0, round(px + (x - px) * i / HEAD_RAMP_STEPS))
+            servo.set_servo_angle(1, round(py + (y - py) * i / HEAD_RAMP_STEPS))
+            if i < HEAD_RAMP_STEPS:
+                time.sleep(HEAD_RAMP_PAUSE_S)
+    else:
+        servo.set_servo_angle(0, x)
+        servo.set_servo_angle(1, y)
+    hardware["_head_xy"] = (x, y)
+    return pan, tilt
 
 
 def _ensure_led_mode(led: Any, mode_code: str, r: int, g: int, b: int, hardware: Dict[str, Any]) -> str:
@@ -579,12 +633,7 @@ def execute(name: str, args: Dict[str, Any], hardware: Dict[str, Any]) -> Option
         if name == "move_head":
             if servo is None:
                 return None
-            pan = _clamp(args.get("pan", 0), -90, 90)
-            tilt = _clamp(args.get("tilt", 0), -90, 90)
-            x = _clamp(90 + pan, 50, 180)
-            y = _clamp(90 + tilt, 0, 180)
-            servo.set_servo_angle(0, x)
-            servo.set_servo_angle(1, y)
+            pan, tilt = set_head(servo, hardware, args.get("pan", 0), args.get("tilt", 0))
             auto_relax = bool(args.get("auto_relax", True))
             if auto_relax:
                 hold_s_raw = args.get("hold_s", HEAD_AUTO_RELAX_DEFAULT_S)
@@ -594,7 +643,10 @@ def execute(name: str, args: Dict[str, Any], hardware: Dict[str, Any]) -> Option
                     hold_s = HEAD_AUTO_RELAX_DEFAULT_S
                 hold_s = _schedule_head_release(servo, hardware, hold_s)
                 return f"Head moved to pan={pan}, tilt={tilt} (auto-relax in {hold_s:.2f}s)"
-            return f"Head moved to pan={pan}, tilt={tilt}"
+            # Holding torque was asked for; a release still pending from an
+            # earlier move would silently drop it, so void that release.
+            cancel_head_release(hardware)
+            return f"Head moved to pan={pan}, tilt={tilt} (torque held)"
 
         return None
 

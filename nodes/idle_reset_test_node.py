@@ -74,8 +74,11 @@ def build_steps() -> list:
     return [
         (f"1a: adopt {STANCE!r}", "set_stance", {"stance": STANCE}, 2.0,
          None),
+        ("1a': turn the head aside", "move_head", {"pan": 30, "tilt": 15}, 1.0,
+         None),
         (f"1b: stand idle for {WATCH_S:.0f}s", None, None, WATCH_S,
-         f"the robot SHOULD stand back up to neutral about {RESET_S:.0f}s in"),
+         f"the robot SHOULD stand back up to neutral about {RESET_S:.0f}s in, "
+         f"and the head should return to level with it"),
 
         (f"2a: adopt {STANCE!r} again", "set_stance", {"stance": STANCE}, 2.0,
          None),
