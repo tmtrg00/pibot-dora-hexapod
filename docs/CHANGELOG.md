@@ -7,6 +7,48 @@ revert an old entry.
 
 ---
 
+## 2026-08-20 — A fight move: the robot steps its middle feet forward, rears onto four legs and jabs with the front pair
+
+New choreography, built in three rounds of owner-watched iteration on hardware.
+`nodes/fight.py` holds the routine; the hardware node serves it as a `fight` tool (same
+direct-drive pattern as `set_stance`, since no queued command can express per-leg foot
+heights); the LLM sees it via `fight_tool_schema()` (18 tool schemas now); `./run.sh fight`
+(`dataflow-fight.yml` + `nodes/fight_test_node.py`) is the watchable test graph. Env knobs:
+`PIBOT_FIGHT_JABS` (default 2 rounds), `PIBOT_FIGHT_FRAME_S`, `PIBOT_FIGHT_MID_SWING_DEG`.
+
+The sequence: body shifts 60mm back, each middle foot takes a lifted two-beat step forward
+(one at a time, five feet always planted), the front pair rises into a parallel boxer's guard
+while the body pitches nose-up, 0.12s jabs snap straight ahead, then everything reverses to
+neutral. 21 keyframes, ~7.7s, smoothstep-eased at 50 frames/s. Every interpolated frame is
+validated offline against the 90..248mm reach window before a servo moves (`validate_routine`,
+mirroring the stances.py doctrine), and `fight` is in MOTION_TOOLS so the battery gate covers
+it.
+
+**Decision:** balance comes from *stepping the middle feet forward to replace the lifted
+front pair* — the owner's suggestion — not from shifting body weight alone. Version one
+(40mm body shift, flat body) tipped the robot onto its head the moment the arms moved: the
+COM sat on the support polygon's front edge. Version two (60mm shift + nose-up pitch, 60mm
+static margin) still fell. Version three steps the middle feet to a forward station so the
+polygon's front edge leads the COM by 99mm, and passed.
+
+**Decision:** the forward station is reached by swinging the middle leg about its hip
+(45deg coxa swing, foot kept at the neutral 140mm horizontal hip distance), not by extending
+the foot outward. The first stepped version pushed the mid feet to 210mm reach and the owner
+saw the tibia straighten out of its load-bearing upside-down-V; the swing keeps the standing
+leg geometry under load (150.1mm reach at the guard vs 146.7mm standing).
+
+Also from owner feedback: the front feet hold the guard forward and parallel like fists
+(x=+/-60mm), not splayed along the legs' 54deg mounts, and the jab is a 0.12s snap rather
+than the original 0.22s reach.
+
+Plain-language summary: the robot can now "spar" — it shuffles its middle legs forward to
+take over from the front ones, sits back like a rearing horse, raises its two front legs
+like a boxer's fists and throws quick punches, then puts everything back and stands normally.
+Getting it to not fall on its face took three tries watched live: the trick in the end was
+the owner's — step the middle legs forward first so they stand where the front legs were.
+The voice assistant can trigger it too ("fight!"), and it refuses to run on a low battery
+like every other movement.
+
 ## 2026-08-20 — Servo pack recharged and the calibrated head verified on hardware: level is level, up is up, and the ultrasonic sees what it aims at
 
 The charger found the right battery this time: the load channel read 7.29V with servo power

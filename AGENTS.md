@@ -163,6 +163,7 @@ bin/py               Node launcher; forces the venv interpreter (RUNBOOKS §2)
 ./run.sh odometry   # same cycles at three speeds; distance should not vary
 ./run.sh approach   # walk up to an obstacle and stop at a set distance
 ./run.sh attitude   # roll/pitch axis check — watch the robot, not the log
+./run.sh fight      # sparring gesture: rears onto four legs, jabs with the front pair (does not travel)
 ./run.sh idlereset  # stance returns to neutral once the robot stops
 ./run.sh camera     # capture attempts only
 ./run.sh            # full autonomous graph, the equivalent of the original main.py
@@ -189,5 +190,6 @@ Names only; full catalogue and credential handling in RUNBOOKS §8.
 - `PIBOT_IDLE_STANCE_RESET_S` — seconds idle before returning to `neutral`; 0 disables.
 - `PIBOT_STANCE_RAMP_STEPS`, `PIBOT_STANCE_RAMP_PAUSE_S` — stance transition smoothing.
 - `PIBOT_HEAD_SPEED_DEG_S`, `PIBOT_HEAD_RAMP_PAUSE_S` — head sweep speed (default 80 deg/s, eased; 0 restores the single-write jump) and frame time.
+- `PIBOT_FIGHT_JABS`, `PIBOT_FIGHT_FRAME_S` — fight routine: jab rounds (default 2) and frame time.
 - `PIBOT_GAIT_FRAME_MS`, `PIBOT_GAIT_SETDOWN_FRAMES`, `PIBOT_GAIT_GROUND_PRESSURE_MM` — gait timing and foot placement.
 - `PIBOT_SERVO_WRITE_CACHE` — 0 to write every servo every frame, as before.

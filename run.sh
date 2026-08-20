@@ -42,6 +42,7 @@ case "${1:-full}" in
   smoothturn) DATAFLOW="dataflow-smoothturn.yml" ;;
   approach) DATAFLOW="dataflow-approach.yml" ;;
   attitude) DATAFLOW="dataflow-attitude.yml" ;;
+  fight)    DATAFLOW="dataflow-fight.yml" ;;
   *)        DATAFLOW="$1" ;;
 esac
 

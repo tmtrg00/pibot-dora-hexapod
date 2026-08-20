@@ -132,6 +132,7 @@ TOOL_OWNER: Dict[str, str] = {
     "turn_to": "hardware",
     "walk_straight": "hardware",
     "approach": "hardware",
+    "fight": "hardware",
     "set_led": "led",
     "buzz": "buzzer",
     "get_distance": "ultrasonic",
@@ -152,6 +153,7 @@ MOTION_TOOLS = {
     "turn_to",
     "walk_straight",
     "approach",
+    "fight",
 }
 
 
@@ -186,6 +188,29 @@ def stance_tool_schema() -> Dict[str, Any]:
             },
         },
     }
+
+def fight_tool_schema() -> Dict[str, Any]:
+    """OpenAI tool schema for fight, appended to the upstream TOOLS list.
+
+    Like set_stance, this lives here because the choreography is this
+    project's work (nodes/fight.py) and the upstream tool list stays
+    untouched.
+    """
+    return {
+        "type": "function",
+        "function": {
+            "name": "fight",
+            "description": (
+                "Perform a playful sparring gesture: the robot leans back onto "
+                "its four rear legs, raises its two front legs like a boxer's "
+                "guard, throws a few alternating jabs, and returns to normal "
+                "standing. Purely theatrical — it does not travel or touch "
+                "anything."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+
 
 def turn_tool_schema() -> Dict[str, Any]:
     """OpenAI tool schema for turn_to, appended to the upstream TOOLS list.

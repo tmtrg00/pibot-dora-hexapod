@@ -1,0 +1,28 @@
+# Fight test graph. MOVES THE ROBOT (leans back onto four legs and jabs with
+# the front pair), but it never travels. Needs servo power, a charged pack and
+# clear space around the front legs.
+#
+#   ./run.sh fight
+#   PIBOT_FIGHT_JABS=4 ./run.sh fight
+
+nodes:
+  - id: hardware
+    path: bin/py
+    args: nodes/hardware_node.py
+    inputs:
+      tick: dora/timer/millis/1000
+      tool_call: fight_test/tool_call
+    outputs:
+      - battery
+      - health
+      - tool_result
+
+  - id: fight_test
+    path: bin/py
+    args: nodes/fight_test_node.py
+    inputs:
+      tick: dora/timer/millis/250
+      tool_result: hardware/tool_result
+      battery: hardware/battery
+    outputs:
+      - tool_call

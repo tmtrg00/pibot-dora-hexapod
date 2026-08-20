@@ -42,6 +42,7 @@ from common import (
 
 common.bootstrap()
 
+import fight as fight_routine  # noqa: E402
 import stances  # noqa: E402
 from heading import (  # noqa: E402
     HeadingHold,
@@ -503,6 +504,44 @@ class Hardware:
             f"max leg reach {actual:.0f}mm (predicted {max(reaches):.0f}mm), "
             f"ramped in {STANCE_RAMP_STEPS} step(s){note}"
         )
+
+    def fight(self) -> Tuple[bool, str]:
+        """Run the sparring routine: rear back onto four legs, jab with the
+        front pair, return to neutral. See nodes/fight.py for the choreography
+        and its offline validation.
+
+        The routine assumes the neutral stance — its first keyframe IS the
+        neutral pose, so starting anywhere else would snap the legs there in
+        one frame. If another stance is applied, ramp back to neutral first
+        through the existing (validated, smoothed) stance path.
+        """
+        if self.applied_stance != "neutral":
+            ok, text = self.apply_stance("neutral")
+            if not ok:
+                return False, f"fight refused: could not return to neutral first — {text}"
+
+        control = self.control
+        # Direct servo drive is only safe with the gait queue idle: the gait
+        # thread acts solely on queued commands, and perform() keeps the idle
+        # auto-relax at bay by refreshing control.timeout.
+        end = time.time() + 15.0
+        while time.time() < end:
+            queue_now = getattr(control, "command_queue", None)
+            if isinstance(queue_now, list) and queue_now and queue_now[0] == "":
+                break
+            time.sleep(0.05)
+        else:
+            return False, "fight refused: the gait queue did not go idle"
+
+        text = fight_routine.perform(control, log=logger.info)
+        if text.startswith("fight refused"):
+            return False, text
+        # perform() ends on the neutral keyframe; confirm the robot agrees
+        # rather than trusting the script (see the pre-flight rule on silent
+        # no-ops).
+        if not control.check_point_validity():
+            return False, text + " BUT the robot reports leg positions out of range."
+        return True, text
 
     def turn_to(self, degrees, tolerance=None) -> str:
         """Rotate in place by `degrees`, closed-loop on the z gyro.
@@ -1616,6 +1655,28 @@ def main() -> None:
                         applied, text = False, refusal
                     else:
                         applied, text = hw.apply_stance(args.get("stance", ""))
+                    node.send_output(
+                        "tool_result",
+                        encode(
+                            {
+                                "id": call.get("id"),
+                                "name": name,
+                                "text": text,
+                                "refused": not applied,
+                            }
+                        ),
+                    )
+                    continue
+
+                # fight is served here for the same reason as set_stance: the
+                # choreography drives per-leg foot points through Control
+                # directly, which no queued command can express.
+                if name == "fight":
+                    refusal = hw.motion_refusal(name, args)
+                    if refusal is not None:
+                        applied, text = False, refusal
+                    else:
+                        applied, text = hw.fight()
                     node.send_output(
                         "tool_result",
                         encode(
