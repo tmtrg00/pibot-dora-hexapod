@@ -7,6 +7,28 @@ revert an old entry.
 
 ---
 
+## 2026-08-20 — The head ramp made lifelike: eased S-curve motion at a speed, replacing the fixed six-step ramp the owner saw snap
+
+The owner watched `test/test_head.py` and reported the pan sweeps "very quick, not really
+smooth" and wanted the movement "more living being like". The six-step ramp shipped earlier
+today finished any move in ~120ms regardless of distance — fast enough to read as a snap.
+`set_head()` now takes time proportional to travel at `PIBOT_HEAD_SPEED_DEG_S` (default
+80deg/s, so a 40deg glance lasts ~0.5s and a nudge stays quick but never under a 0.15s floor)
+and follows a smoothstep S-curve — accelerate, glide, settle — which is what makes motion read
+as a gesture rather than an actuation. `PIBOT_HEAD_RAMP_STEPS` is gone; speed 0 restores the
+old single-write jump. Verified offline: a 40deg sweep runs 482ms over 25 frames, monotonic,
+edge frames moving 1deg where mid-flight moves 5deg. The same run confirmed on hardware that
+both head servos move (pan sweeps, tilt nods — tilt's ±20deg is just visually small) and that
+the aim survey saw 0-1 echoes at every tilt, i.e. no target was in range rather than a wrong
+trim; re-run pending with a wall or box 0.5-1.5m ahead. Battery read 6.12V under light load —
+near the 6.0V floor, charge before more motion work.
+
+Plain-language summary: the robot's head used to flick to each position almost instantly,
+which looked robotic. Now it turns the way an animal glances at something — starting gently,
+sweeping, and settling — taking about half a second for a big turn. The sensor-aiming survey
+from earlier came back empty because nothing was in front of the robot to see, so that check
+still needs a box or wall placed ahead of it.
+
 ## 2026-08-20 — Head movement made deliberate: ramped moves, code-enforced levelling, and torque held while the approach aims through it
 
 The head (camera pan/tilt on PCA9685 0x41 channels 0/1) carries the ultrasonic sensor, so head

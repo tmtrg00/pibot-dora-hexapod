@@ -13,8 +13,9 @@ Run with everything else stopped (./stop.sh) so nothing owns the I2C bus:
 
     ./venv/bin/python test/test_head.py
 
-Env: PIBOT_HEAD_RAMP_STEPS / PIBOT_HEAD_RAMP_PAUSE_S tune the ramp,
-PIBOT_BATTERY_FLOOR the refusal voltage (default 6.0).
+Env: PIBOT_HEAD_SPEED_DEG_S tunes the sweep speed (default 80 deg/s; 0 = jump),
+PIBOT_HEAD_RAMP_PAUSE_S the frame time, PIBOT_BATTERY_FLOOR the refusal
+voltage (default 6.0).
 """
 
 import os
@@ -49,7 +50,7 @@ STEPS = [
     ("level again", 0, 0),
 ]
 
-print(f"ramp: {actions.HEAD_RAMP_STEPS} steps, {actions.HEAD_RAMP_PAUSE_S}s pause")
+print(f"sweep speed: {actions.HEAD_SPEED_DEG_S} deg/s, frame {actions.HEAD_RAMP_PAUSE_S}s")
 for label, pan, tilt in STEPS:
     print(f"  {label:12s} -> pan={pan:+d} tilt={tilt:+d}  (watch: smooth sweep, no snap)")
     actions.set_head(servo, hardware, pan, tilt)

@@ -188,6 +188,6 @@ Names only; full catalogue and credential handling in RUNBOOKS §8.
 - `PIBOT_HEADING_GAIN`, `PIBOT_HEADING_I_RATIO` — heading-hold steering gains.
 - `PIBOT_IDLE_STANCE_RESET_S` — seconds idle before returning to `neutral`; 0 disables.
 - `PIBOT_STANCE_RAMP_STEPS`, `PIBOT_STANCE_RAMP_PAUSE_S` — stance transition smoothing.
-- `PIBOT_HEAD_RAMP_STEPS`, `PIBOT_HEAD_RAMP_PAUSE_S` — head pan/tilt smoothing; steps 1 restores the single-write jump.
+- `PIBOT_HEAD_SPEED_DEG_S`, `PIBOT_HEAD_RAMP_PAUSE_S` — head sweep speed (default 80 deg/s, eased; 0 restores the single-write jump) and frame time.
 - `PIBOT_GAIT_FRAME_MS`, `PIBOT_GAIT_SETDOWN_FRAMES`, `PIBOT_GAIT_GROUND_PRESSURE_MM` — gait timing and foot placement.
 - `PIBOT_SERVO_WRITE_CACHE` — 0 to write every servo every frame, as before.

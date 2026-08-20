@@ -236,10 +236,13 @@ HEAD_AUTO_RELAX_DEFAULT_S = 0.4
 
 # The head servos used to slam straight to the target in one write — the servo
 # moves as fast as it physically can, which shakes the camera and the
-# head-mounted ultrasonic whose aim the approach depends on. Interpolate
-# instead, like the stance ramp. Steps <= 1 restores the old single-write jump.
-HEAD_RAMP_STEPS = max(1, int(os.environ.get("PIBOT_HEAD_RAMP_STEPS", "6")))
-HEAD_RAMP_PAUSE_S = max(0.0, float(os.environ.get("PIBOT_HEAD_RAMP_PAUSE_S", "0.02")))
+# head-mounted ultrasonic whose aim the approach depends on, and looks
+# mechanical. Instead the move takes time proportional to how far it travels
+# (a big glance lasts longer than a small one) and follows a smoothstep
+# S-curve — accelerate, glide, settle — which is what makes it read as a
+# living gesture rather than an actuation. Speed 0 restores the old jump.
+HEAD_SPEED_DEG_S = max(0.0, float(os.environ.get("PIBOT_HEAD_SPEED_DEG_S", "80")))
+HEAD_RAMP_PAUSE_S = max(0.005, float(os.environ.get("PIBOT_HEAD_RAMP_PAUSE_S", "0.02")))
 
 
 def _clamp(value: Any, minimum: int, maximum: int) -> int:
@@ -383,12 +386,19 @@ def set_head(servo: Any, hardware: Dict[str, Any], pan: Any, tilt: Any) -> tuple
     x = _clamp(90 + pan, 50, 180)
     y = _clamp(90 + tilt, 0, 180)
     previous = hardware.get("_head_xy")
-    if previous is not None and HEAD_RAMP_STEPS > 1:
+    travel = 0 if previous is None else max(abs(x - previous[0]), abs(y - previous[1]))
+    if travel and HEAD_SPEED_DEG_S > 0:
         px, py = previous
-        for i in range(1, HEAD_RAMP_STEPS + 1):
-            servo.set_servo_angle(0, round(px + (x - px) * i / HEAD_RAMP_STEPS))
-            servo.set_servo_angle(1, round(py + (y - py) * i / HEAD_RAMP_STEPS))
-            if i < HEAD_RAMP_STEPS:
+        # Never faster than a beat even for a nudge: below ~0.15s the easing
+        # has no room to show and the move reads as a twitch.
+        duration = max(0.15, travel / HEAD_SPEED_DEG_S)
+        steps = max(2, round(duration / HEAD_RAMP_PAUSE_S))
+        for i in range(1, steps + 1):
+            t = i / steps
+            eased = t * t * (3.0 - 2.0 * t)
+            servo.set_servo_angle(0, round(px + (x - px) * eased))
+            servo.set_servo_angle(1, round(py + (y - py) * eased))
+            if i < steps:
                 time.sleep(HEAD_RAMP_PAUSE_S)
     else:
         servo.set_servo_angle(0, x)
