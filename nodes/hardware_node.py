@@ -165,6 +165,11 @@ APPROACH_MEDIAN_SAMPLES = 3
 APPROACH_STALE_S = 2.0
 APPROACH_MIN_CM = 2.0
 APPROACH_MAX_CM = 400.0
+# Diagnostic only (PENDING 2026-08-20, the approach overshoot): how long to
+# watch the distance after a stop before taking the last reading as the settled
+# position. Long enough to outlast any readings dora buffered mid-cycle during
+# the stop, short enough to finish before the driver's next step moves anything.
+APPROACH_SETTLE_DIAG_S = 1.5
 
 
 class Approach:
@@ -284,6 +289,12 @@ class Hardware:
         # run as a blocking loop so the node keeps receiving distance messages
         # while the robot walks — see the Approach docstring.
         self.approach: Optional[Approach] = None
+        # Diagnostic only (PENDING 2026-08-20, the approach overshoot): a
+        # snapshot taken at the stop decision so the settled distance that
+        # arrives after the robot halts can be compared against what the loop
+        # predicted the in-flight cycle would deliver. None except in the short
+        # window between a stop and its settled reading. Does not affect motion.
+        self.approach_diag: Optional[dict] = None
 
         # ADC first and on its own: it is the one device we must be able to
         # read *before* deciding whether it is safe to energise the servos.
@@ -1107,6 +1118,9 @@ class Hardware:
         """Begin walking toward an obstacle. Returns a refusal, or None if started."""
         if self.approach is not None:
             return "Refused: an approach is already running"
+        # Drop any unflushed settle diagnostic from a previous approach so it
+        # cannot bleed into this one (diagnostic only).
+        self.approach_diag = None
 
         direction = str(args.get("direction", "forward")).strip().lower()
         if direction not in ("forward", "backward"):
@@ -1220,6 +1234,24 @@ class Hardware:
             else filtered + state.lead_cm
         )
         if state.satisfied(predicted):
+            # Diagnostic only (PENDING 2026-08-20): record what the loop
+            # believed at the stop decision so the settled reading arriving
+            # after the robot halts can measure what the in-flight cycle
+            # actually delivered. `finish_approach` clears `self.approach`, so
+            # capture from `state` first.
+            self.approach_diag = {
+                "decision_cm": filtered,
+                "predicted_cm": predicted,
+                "lead_cm": state.lead_cm,
+                "per_cycle": state.travel_cm_per_cycle,
+                "stop_cm": state.stop_cm,
+                "direction": state.direction,
+                "settled_cm": None,
+                # Set on the first reading after the stop, not now: finish
+                # blocks while the robot settles, so timing the window from here
+                # could close it before any settled reading arrived.
+                "deadline": None,
+            }
             return self.finish_approach(
                 f"reached {filtered:.1f}cm from the obstacle "
                 f"(target {state.stop_cm:.0f}cm, stopped {state.lead_cm:.1f}cm early "
@@ -1227,6 +1259,42 @@ class Hardware:
                 f"per cycle)"
             )
         return None
+
+    def approach_settle_diag(self, cm: float) -> Optional[str]:
+        """Diagnostic only (PENDING 2026-08-20, the approach overshoot).
+
+        After an approach stops, watch the distance for a short window and take
+        the last clean reading as the settled position. Compare it against what
+        the loop predicted the in-flight cycle would deliver, so a bad
+        per-cycle travel estimate (which stops the robot early) is visible as a
+        number rather than inferred. Observes only; changes no motion.
+        """
+        diag = self.approach_diag
+        if diag is None:
+            return None
+        if diag["deadline"] is None:
+            # First reading after the stop: start the settle window here so any
+            # readings dora buffered mid-cycle are overwritten by fresh ones.
+            diag["deadline"] = time.monotonic() + APPROACH_SETTLE_DIAG_S
+        if APPROACH_MIN_CM <= cm <= APPROACH_MAX_CM:
+            diag["settled_cm"] = cm  # keep the latest; stale buffered reads age out
+        if time.monotonic() < diag["deadline"]:
+            return None
+        self.approach_diag = None
+        settled = diag["settled_cm"]
+        if settled is None:
+            return None
+        decision = diag["decision_cm"]
+        actual_travel = abs(decision - settled)
+        return (
+            f"approach diagnostic: stop decided at {decision:.1f}cm, loop predicted the "
+            f"cycle in flight would reach {diag['predicted_cm']:.1f}cm "
+            f"(lead {diag['lead_cm']:.1f}cm at {diag['per_cycle']:.1f}cm/cycle); "
+            f"settled at {settled:.1f}cm — the in-flight cycle actually carried "
+            f"{actual_travel:.1f}cm ({actual_travel - diag['lead_cm']:+.1f}cm vs the lead "
+            f"predicted), final {settled - diag['stop_cm']:+.1f}cm from the "
+            f"{diag['stop_cm']:.0f}cm target"
+        )
 
     def approach_tick(self) -> Optional[str]:
         """Safety and steering, once per node tick. Returns a result when done."""
@@ -1421,6 +1489,13 @@ def main() -> None:
                         encode({"id": call_id, "name": "approach",
                                 "text": done, "refused": "ABORTED" in done}),
                     )
+                else:
+                    # Diagnostic only (PENDING 2026-08-20): once an approach has
+                    # stopped, the next readings measure where it actually
+                    # settled versus what the stop predicted.
+                    settle = hw.approach_settle_diag(cm)
+                    if settle is not None:
+                        logger.info(settle)
                 continue
 
             if event["id"] == "tick":

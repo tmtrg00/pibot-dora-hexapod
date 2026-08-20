@@ -7,6 +7,49 @@ revert an old entry.
 
 ---
 
+## 2026-08-20 — Instrumented the approach stop to measure the in-flight cycle's real travel, before touching the accuracy
+
+The approach overshoot (PENDING) had one hardware run of data — stopped 8.3cm short of a 25cm
+target — and the same lesson the turn taught applies: the last two changes to a movement loop
+were made on inference and one was wrong, so measure before changing. This adds instrumentation
+only; the stop logic is untouched.
+
+`turn_to` and the approach stop share a shape: both predict where the *in-flight* gait cycle
+(the one that cannot be interrupted, and runs on after the stop is decided) will leave the
+robot, and stop when that prediction reaches the target. The approach's prediction is
+`lead_cm` — the travel it expects that final cycle to add — set to `travel_cm_per_cycle`, which
+is averaged over the whole approach. `finish_approach` then blocks while the robot completes
+that cycle and settles, exactly as `turn_to`'s finally block does.
+
+The instrumentation snapshots the prediction at the stop decision and, once the robot has
+halted, takes the settled distance from the readings that follow (last reading in a 1.5s window,
+so any readings dora buffered mid-cycle age out). It logs one line: where the stop was decided,
+what the loop predicted the in-flight cycle would reach, and where it actually settled — so the
+in-flight cycle's *real* travel is a measured number against the predicted `lead_cm`. It changes
+no motion: the stop fires exactly as before, and the settle window only observes the readings
+that were already arriving. Verified under `PIBOT_NO_MOTION=1` that the added code paths run
+without error and the graph still tears down cleanly; the diagnostic line itself needs a real
+motion run to produce values.
+
+Applied to the one existing run's numbers by hand, the framing it will print is telling: the
+loop predicted the final cycle would carry 12.8cm (its whole-approach average), the robot
+settled having moved only ~1.5cm after the decision, and it stopped 6.8cm short. The hypothesis
+this is built to confirm or refute: the final cycle — a decelerating, stopping cycle — covers
+far less ground than a full-stride cruising cycle, so using the whole-approach average as the
+lead over-predicts it and stops the robot early. Deliberately not acted on yet — this needs a
+few `./run.sh approach` runs with a tape measure against the physical robot (PENDING), both to
+confirm the mechanism and to catch whether the sensor itself reads long or short, before the
+lead calculation is changed.
+
+Plain-language summary: the robot stops a bit too far from obstacles when it walks up to them.
+Before changing anything — an earlier guess at a related problem had already gone the wrong way
+— the code was fitted with a measurement that records, each time it stops, how far it *thought*
+its last step would carry it versus how far it actually went. On the one run so far those
+numbers are very different (it expected ~13cm and got ~1.5cm), which points at the last step
+before stopping being much smaller than the average step the robot uses to judge it. That is now
+a hypothesis with an instrument pointed at it, to be confirmed over a few runs with a tape
+measure rather than fixed on a hunch.
+
 ## 2026-08-20 — Single-purpose graphs now stop themselves: the driver node broadcasts a shutdown so timer-driven device nodes end instead of hanging `dora run`
 
 The approach graph left `dora run` hanging after the test finished (PENDING 2026-08-20): the
