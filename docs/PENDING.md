@@ -18,14 +18,6 @@ tells you something.
   Needs a few more runs, ideally with an independent tape measurement, before concluding the
   averaging change made things worse rather than this run being an outlier.
 
-- [TODO 2026-08-20] **`dataflow-approach.yml` never exits on its own.** Twice in a row
-  (CHANGELOG 2026-08-20), after the `approach_test` driver node logged "finished successfully"
-  and returned the robot to neutral/relaxed, `hardware` and `ultrasonic` kept idling on their
-  timer ticks forever and `dora run` never returned — `./stop.sh` was needed both times. The
-  robot was already safe when this happened, so it's not a hardware risk, but the CLI silently
-  hanging after a "successful" run is worth fixing and worth checking against the other
-  single-purpose test graphs to see if they share the same teardown gap.
-
 - [TODO 2026-08-16] **Verify the full autonomous graph end to end.** Four of the eight nodes
   have never run against real hardware: `audio`, `llm`, `brain` and `buzzer`. The wake word,
   Whisper, GPT-4o, tool dispatch, TTS and barge-in path is entirely unproven. `buzzer` is the

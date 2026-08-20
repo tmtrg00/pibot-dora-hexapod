@@ -242,6 +242,10 @@ def main() -> None:
             f"PIBOT_TURN_DEG_PER_CYCLE=<value> for a full {TARGET_DEGREES:.0f}deg turn."
         )
 
+    # Stop the timer-driven device nodes so `dora run` returns instead of
+    # idling on their ticks after this driver exits (CHANGELOG 2026-08-20).
+    common.send_shutdown(node)
+
 
 if __name__ == "__main__":
     main()

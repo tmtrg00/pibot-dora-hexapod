@@ -220,6 +220,10 @@ def main() -> None:
     if aborted:
         logger.warning("Run was ABORTED - robot returned to neutral and relaxed.")
 
+    # Stop the timer-driven device nodes so `dora run` returns instead of
+    # idling on their ticks after this driver exits (CHANGELOG 2026-08-20).
+    common.send_shutdown(node)
+
 
 if __name__ == "__main__":
     main()

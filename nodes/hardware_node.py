@@ -1460,6 +1460,13 @@ def main() -> None:
 
             elif event["id"] == "tool_call":
                 call = decode(event)
+                if common.is_shutdown(call):
+                    # The driver's script has finished. This node owns a timer
+                    # input, so nothing else will ever end its loop; stop now so
+                    # `dora run` can return instead of hanging (CHANGELOG
+                    # 2026-08-20).
+                    logger.info("shutdown received — ending run")
+                    break
                 if not call or not owns(NODE, call.get("name", "")):
                     continue
 

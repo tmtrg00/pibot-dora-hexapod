@@ -7,6 +7,56 @@ revert an old entry.
 
 ---
 
+## 2026-08-20 — Single-purpose graphs now stop themselves: the driver node broadcasts a shutdown so timer-driven device nodes end instead of hanging `dora run`
+
+The approach graph left `dora run` hanging after the test finished (PENDING 2026-08-20): the
+`approach_test` node exited "successfully", the robot was already back in neutral and relaxed,
+but `hardware` and `ultrasonic` kept idling on their timer ticks and the CLI never returned,
+needing `./stop.sh`. This turned out to be shared by every single-purpose graph, not just
+approach.
+
+**Root cause, established with a throwaway two-node dataflow rather than guessed.** A dora
+node's event loop (`for event in node`) ends only when *all* its senders have dropped
+(`Node.next()` returns None). A device node that owns a timer input — `hardware` in every
+graph, `ultrasonic` in approach — has a sender that never drops, so it keeps running on ticks
+after the driver node exits, and `dora run` waits for it forever. Confirmed directly: a
+timer-driven worker ran on (ticks 4..61) after its driver exited, and only `--stop-after`
+ended it. dora 0.5.0 exposes no node-side API to stop a dataflow (checked the `Node` surface
+and the `dora run` options) and does not cascade a node's exit to its peers.
+
+Device nodes *without* a timer are fine as they are: `led` in the motion graph (its only input
+is `motion_test/emotion`) and `camera` in the camera graph (only `camera_test/capture`) drop
+their sole sender when the driver exits and end on their own. So the camera graph never hung
+and needs no change.
+
+**Fix:** a reserved pseudo-tool `__shutdown__` (`common.SHUTDOWN_TOOL`, with
+`common.send_shutdown()` / `common.is_shutdown()`). Each of the eleven driver test nodes
+broadcasts it on the already-wired `tool_call` stream as the last thing it does; `hardware`
+and `ultrasonic` end their event loop when they see it. It is not a real tool — absent from
+`TOOL_OWNER`, dispatched by nobody — so the check sits ahead of the ownership test and the full
+autonomous graph, where nothing sends it, is unaffected. No dataflow YAML was re-wired: every
+graph's driver already broadcasts `tool_call` to its device nodes. `camera_test` is the one
+driver left alone — it emits `capture`, not `tool_call`, and its graph does not hang.
+
+**Verified on hardware (no servos moved).** Ran the approach graph under `PIBOT_NO_MOTION=1`,
+which brings up the I2C/ADC and the full node event loops but never constructs `Control()`, so
+nothing can move. `dora run` returned on its own in ~11s (exit 0) where it had hung before;
+the log shows both `hardware` and `ultrasonic` logging "shutdown received — ending run" and all
+three nodes finishing successfully, with no orphaned processes left. The shutdown is sent at
+the end of `main()` on both the success and the abort path, and every driver's `main()` reaches
+that point (no early returns bypass it), so the motion graphs get the same teardown.
+
+Plain-language summary: after one of the robot's self-contained test routines finished, the
+program behind it would not quit on its own — the parts that talk to the sensors and legs kept
+ticking over in the background, so the command never returned to the prompt and had to be
+killed by hand. The cause was pinned down with a tiny standalone test rather than guesswork:
+those background parts run on a repeating timer that never stops by itself. The fix has the
+test routine send a clear "we're done" signal when it finishes, which those parts now listen
+for and shut down on. It was verified on the real Pi in a mode that powers everything up but
+physically cannot move the robot, so it was safe to run: the program now exits cleanly by
+itself. Every one of the eleven test routines got the same treatment; the camera test never
+had the problem.
+
 ## 2026-08-20 — The turn overshoot was the body settling after the stop, not the planner; compensating for it moves smoothturn from FAIL to PASS
 
 The turn overshoot open since 2026-08-19 (every `turn_to` landing ~4deg past target, both

@@ -328,6 +328,45 @@ def owns(node_name: str, tool_name: str) -> bool:
 
 
 # --------------------------------------------------------------------------
+# Graph shutdown
+# --------------------------------------------------------------------------
+# A reserved pseudo-tool a driver node broadcasts on the shared `tool_call`
+# stream once its script has finished. It is the graph's off switch.
+#
+# Why it is needed: a node's event loop (`for event in node`) only ends when
+# every one of its senders has dropped. A device node that owns a timer input
+# (`hardware` always, `ultrasonic` in the approach graph) has a sender that
+# never drops, so it keeps idling on ticks after the driver node has exited —
+# and `dora run` waits for it forever. The single-purpose graph then hangs with
+# the robot already safe, needing `./stop.sh` to clear (CHANGELOG 2026-08-20).
+# dora 0.5.0 has no node-side API to stop the dataflow and does not cascade a
+# node's exit to its peers, so the driver has to tell the timer-driven nodes to
+# stop. Device nodes without a timer (`led` in motion, `camera`) exit on their
+# own when the driver drops, and ignore this.
+#
+# It is not a real tool: absent from TOOL_OWNER, dispatched by no node. A device
+# node simply ends its event loop when it sees it. The leading underscores keep
+# it from ever colliding with an LLM tool name.
+SHUTDOWN_TOOL = "__shutdown__"
+
+
+def send_shutdown(node: Any) -> None:
+    """Broadcast the shutdown pseudo-tool on `tool_call`.
+
+    Call once at the very end of a driver node's run, after the last result is
+    in. Timer-driven device nodes end their loop on it so the dataflow
+    terminates and `dora run` returns; nodes that do not subscribe to
+    `tool_call` never see it and are unaffected.
+    """
+    node.send_output("tool_call", encode({"id": SHUTDOWN_TOOL, "name": SHUTDOWN_TOOL, "args": {}}))
+
+
+def is_shutdown(call: Any) -> bool:
+    """True if a decoded `tool_call` payload is the reserved shutdown broadcast."""
+    return bool(call) and call.get("name") == SHUTDOWN_TOOL
+
+
+# --------------------------------------------------------------------------
 # Tool-call shim
 # --------------------------------------------------------------------------
 # The OpenAI SDK returns tool calls as objects with `.id` and
